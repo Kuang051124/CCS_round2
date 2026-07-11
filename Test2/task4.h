@@ -9,56 +9,39 @@
  *   A→B段: A走A→O→B(绕O, 路程长+慢速), B走DA弧+A→B(直线, 路程短+快速) → B超A
  *   C→D段: B走C→O→D(绕O, 路程长+慢速), A走C→D+DA弧(直线, 路程短+快速) → A超B
  *
- * 延时段 (SEG_STRAIGHT_DELAY): A→O, O→B, C→O, O→D  暂用延时替代编码器
+ * 延时段 (SEG_STRAIGHT_DELAY): A→O, O→B, C→O, O→D  编码器计数值判定终点 (T4_ENCODER_TARGET=1700)
  */
 
 #ifndef _TASK4_H_
 #define _TASK4_H_
 
 #include "ti_msp_dl_config.h"
+#include "mode1.h"
 
 /* ===================================================================
- * 延时段参数 (temporary, 编码器到位后替换)
+ * 编码器到位参数
  * =================================================================== */
 
-#define T4_AO_DELAY_MS      8000    /* A→O 延时 (ms) */
-#define T4_OB_DELAY_MS      8000    /* O→B 延时 (ms) */
-#define T4_CO_DELAY_MS      8000    /* C→O 延时 (ms) */
-#define T4_OD_DELAY_MS      8000    /* O→D 延时 (ms) */
+#define T4_ENCODER_TARGET   2100     /* 左右轮编码器平均计数 → 直段终点 (A→O/O→B/C→O/O→D) */
 
 /* ===================================================================
- * 速度倍率 — A车 (A→O→B→BC弧→C→D→DA弧)
+ * Task4 每段独立参数 — 替代旧的 tk_speed_mult 间接调速
+ * 字段: spd_straight, spd_arc, spd_arc_kp, gyro_kp, arc_ofs_cw, arc_ofs_ccw, arc_ofs_cw_t2, arc_ofs_ccw_t2
  * =================================================================== */
 
-#define T4A_AO_MULT         0.9f    /* A→O 延时直 (慢速, 等B超)      */
-#define T4A_OB_MULT         0.9f    /* O→B 延时直 (慢速, 等B超)      */
-#define T4A_BC_MULT         1.0f    /* BC弧     (正常巡线)           */
-#define T4A_CD_MULT         1.40f   /* C→D 直   (快速, 超B)         */
-#define T4A_DA_MULT         1.40f   /* DA弧     (快速, 回A)         */
+/* ---- A车 5段 ---- */
+extern T1Param t4_AO;    /* A→O 慢速DELAY直 */
+extern T1Param t4_OB;    /* O→B 慢速DELAY直 */
+extern T1Param t4_ABC;   /* BC弧 正常巡线   */
+extern T1Param t4_ACD;   /* C→D 快速直     */
+extern T1Param t4_ADA;   /* DA弧 快速回A    */
 
-/* ===================================================================
- * 速度倍率 — B车 (DA弧→A→B→BC弧→C→O→D)
- * =================================================================== */
-
-#define T4B_DA_MULT         1.40f   /* DA弧     (快速, 追A)         */
-#define T4B_AB_MULT         1.40f   /* A→B 直   (快速, 超A)         */
-#define T4B_BC_MULT         1.0f    /* BC弧     (正常巡线)           */
-#define T4B_CO_MULT         1.0f    /* C→O 延时直 (慢速, 等A超)      */
-#define T4B_OD_MULT         1.0f    /* O→D 延时直 (慢速, 到终点)     */
-
-/* ===================================================================
- * 速度限幅 (摄像头P控用, 暂时关闭)
- * =================================================================== */
-
-#define T4_SPEED_MIN        0.40f   /* 最小速度倍率                     */
-#define T4_SPEED_MAX        1.50f   /* 最大速度倍率                     */
-
-/* ===================================================================
- * 摄像头测距 P 控制 (同 Task3)
- * =================================================================== */
-
-#define T4_DIST_TARGET      40.0f   /* 目标距离 (cm)                    */
-#define T4_DIST_KP          0.02f   /* 距离 P 增益                      */
+/* ---- B车 5段 ---- */
+extern T1Param t4_BDA;   /* DA弧 快速追A    */
+extern T1Param t4_BAB;   /* A→B 快速超A    */
+extern T1Param t4_BBC;   /* BC弧 正常巡线   */
+extern T1Param t4_BCO;   /* C→O 慢速DELAY  */
+extern T1Param t4_BOD;   /* O→D 慢速DELAY  */
 
 /* ===================================================================
  * API

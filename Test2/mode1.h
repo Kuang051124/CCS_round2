@@ -71,7 +71,7 @@
 #define SEG_STRAIGHT       0    /* 直线: 陀螺仪保持, 巡线终点检测      */
 #define SEG_ARC_CW         1    /* 顺时针弧: 巡线 + CW偏移            */
 #define SEG_ARC_CCW        2    /* 逆时针弧: 巡线 + CCW偏移           */
-#define SEG_STRAIGHT_DELAY 3    /* 直线: 陀螺仪保持, 延时终点 (Task4用) */
+#define SEG_STRAIGHT_DELAY 3    /* 直线: 陀螺仪保持, 编码器计数值判定终点 (Task4用) */
 
 #define GYRO_SRC_WIT    0    /* WIT 串口陀螺仪 */
 #define GYRO_SRC_MPU    1    /* MPU6050 I2C + DMP  */
@@ -103,9 +103,6 @@ extern float tk_speed_mult;
 /* 超车航向偏置: 叠加到目标航向, 0=无偏置/正常行驶 */
 extern float tk_heading_bias;
 
-/* 直线段延时终点: >0=用延时(ms)替代巡线检测, 0=正常巡线 (Task4 delay段用) */
-extern uint32_t tk_seg_delay_ms;
-
 /* ===================================================================
  * 路径段描述
  * =================================================================== */
@@ -116,6 +113,7 @@ typedef struct {
                                    0=采样当前航向 */
     const char *name;           /* OLED 显示段名 */
     const char *target;         /* 目标点 */
+    uint8_t     is_return;      /* 弧线段: 0=远离起点(delta大), 1=接近起点(delta小) */
 } PathSeg;
 
 /* ===================================================================
