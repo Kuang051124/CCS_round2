@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include "BLUETOOTH/bluetooth.h"
+#include "ENCODER/encoder.h"
 
 extern uint8_t oled_buffer[32];
 
@@ -154,14 +155,62 @@ void Page_Calib(void)
 }
 
 /* ==================================================================
- * Page_Debug - 调试页（page_state = 2）
- * TODO: 补充调试逻辑
+ * Page_Debug - 编码器调试页（page_state = 2）
+ *
+ * 显示内容:
+ *   Line 0: 标题
+ *   Line 1~2: 左/右轮编码器计数值 (正值=前进)
+ *   Line 3~4: 左/右轮实时速度 (counts/s)
+ *   Line 5~6: 操作提示
+ *   Line 7: 9:Home  8:RST
+ *
+ * 按键:
+ *   8 = 清零计数器
+ *   9 = 返回 Home
  * ================================================================== */
 void Page_Debug(void)
 {
-    if (Scan_Keyboard() == 9) { while (Scan_Keyboard()); page_state = 0; }
-    OLED_ShowString(0, 0, (uint8_t *)"Debug Page", 8);
-    OLED_ShowString(0, 7, (uint8_t *)"9:Home", 8);
+    uint8_t k = Scan_Keyboard();
+
+    /* 9: 返回 Home */
+    if (k == 9) { while (Scan_Keyboard()); page_state = 0; return; }
+
+    /* 8: 清零编码器计数 */
+    if (k == 8) {
+        ENCODER_ResetLeft();
+        ENCODER_ResetRight();
+    }
+
+    /* 周期性速度采样 (依赖 tick_ms, 10ms 间隔自动节流) */
+    ENCODER_SpeedSample();
+
+    /* ========== OLED 显示 ========== */
+
+    /* Line 0: 标题 */
+    OLED_ShowString(0, 0, (uint8_t *)"Encoder Debug", 8);
+
+    /* Line 1: 左轮计数值 (ENCODER_GetLeftCount 已取反, 正=前进) */
+    sprintf((char *)oled_buffer, "L_Cnt:%+8ld", (long)ENCODER_GetLeftCount());
+    OLED_ShowString(0, 1, oled_buffer, 8);
+
+    /* Line 2: 右轮计数值 */
+    sprintf((char *)oled_buffer, "R_Cnt:%+8ld", (long)ENCODER_GetRightCount());
+    OLED_ShowString(0, 2, oled_buffer, 8);
+
+    /* Line 3: 左轮速度 (counts/s) */
+    sprintf((char *)oled_buffer, "L_Spd:%+7d/s", (int)ENCODER_GetLeftSpeed());
+    OLED_ShowString(0, 3, oled_buffer, 8);
+
+    /* Line 4: 右轮速度 (counts/s) */
+    sprintf((char *)oled_buffer, "R_Spd:%+7d/s", (int)ENCODER_GetRightSpeed());
+    OLED_ShowString(0, 4, oled_buffer, 8);
+
+    /* Line 5~6: 提示 */
+    OLED_ShowString(0, 5, (uint8_t *)"Rotate wheel to", 8);
+    OLED_ShowString(0, 6, (uint8_t *)"see count change", 8);
+
+    /* Line 7: 按键提示 */
+    OLED_ShowString(0, 7, (uint8_t *)"9:Home  8:RST", 8);
 }
 
 /* ==================================================================

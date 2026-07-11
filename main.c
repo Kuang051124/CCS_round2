@@ -41,7 +41,8 @@
 #include "tb6612.h"
 #include "Keyboard/keyboard.h"
 #include "ti_msp_dl_config.h"
-#include "bluetooth.h"
+#include "BLUETOOTH/bluetooth.h"
+#include "ENCODER/encoder.h"
 
 uint8_t oled_buffer[32];
 int CAR_ID=2;//1是主车，2为从车
@@ -60,6 +61,7 @@ int main(void) {
 
   /* Don't remove this! */
   Interrupt_Init();
+  ENCODER_Init();
   Motor_Init();
   Keyboard_Init();
   Bluetooth_Init();

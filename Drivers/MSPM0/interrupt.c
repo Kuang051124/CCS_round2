@@ -7,16 +7,15 @@
 #include "vl53l0x.h"
 #include "lsm6dsv16x.h"
 #include "../../yb_protocol/yb_protocol.h"
+#include "ENCODER/encoder.h"
 #include "BLUETOOTH/bluetooth.h"
 
 uint8_t enable_group1_irq = 0;
 
 void Interrupt_Init(void)
 {
-    if(enable_group1_irq)
-    {
-        NVIC_EnableIRQ(1);
-    }
+    /* Group1 统一使能: GPIOA/GPIOB 中断用于编码器及其他传感器 */
+    NVIC_EnableIRQ(GPIOA_INT_IRQn);
 }
 
 void SysTick_Handler(void)
@@ -117,6 +116,7 @@ void UART_WIT_INST_IRQHandler(void)
 void GROUP1_IRQHandler(void)
 {
     switch (DL_Interrupt_getPendingGroup(DL_INTERRUPT_GROUP_1)) {
+        /* ====== GPIOA 中断分派 (传感器 + 编码器) ====== */
         #if defined GPIO_MULTIPLE_GPIOA_INT_IIDX
         case GPIO_MULTIPLE_GPIOA_INT_IIDX:
             switch (DL_GPIO_getPendingInterrupt(GPIOA))
@@ -139,11 +139,77 @@ void GROUP1_IRQHandler(void)
                     break;
                 #endif
 
+                /* ====== 编码器 GPIOA 中断 (LA=PA31, LB=PA28, RA=PA29) ====== */
+                case ENCODERs_LA_IIDX:
+                    if (DL_GPIO_readPins(GPIOA, ENCODERs_LB_PIN)) {
+                        g_leftEncoderCount++;
+                    } else {
+                        g_leftEncoderCount--;
+                    }
+                    DL_GPIO_clearInterruptStatus(GPIOA, ENCODERs_LA_PIN);
+                    break;
+
+                case ENCODERs_LB_IIDX:
+                    if (DL_GPIO_readPins(GPIOA, ENCODERs_LA_PIN)) {
+                        g_leftEncoderCount++;
+                    } else {
+                        g_leftEncoderCount--;
+                    }
+                    DL_GPIO_clearInterruptStatus(GPIOA, ENCODERs_LB_PIN);
+                    break;
+
+                case ENCODERs_RA_IIDX:
+                    if (DL_GPIO_readPins(GPIOB, ENCODERs_RB_PIN)) {
+                        g_rightEncoderCount++;
+                    } else {
+                        g_rightEncoderCount--;
+                    }
+                    DL_GPIO_clearInterruptStatus(GPIOA, ENCODERs_RA_PIN);
+                    break;
+
                 default:
                     break;
             }
+            break;
+        #elif defined ENCODERs_GPIOA_INT_IIDX
+        /* 仅编码器使用 GPIOA 中断 (GPIO_MULTIPLE 未定义时) */
+        case ENCODERs_GPIOA_INT_IIDX:
+            switch (DL_GPIO_getPendingInterrupt(GPIOA))
+            {
+                case ENCODERs_LA_IIDX:
+                    if (DL_GPIO_readPins(GPIOA, ENCODERs_LB_PIN)) {
+                        g_leftEncoderCount++;
+                    } else {
+                        g_leftEncoderCount--;
+                    }
+                    DL_GPIO_clearInterruptStatus(GPIOA, ENCODERs_LA_PIN);
+                    break;
+
+                case ENCODERs_LB_IIDX:
+                    if (DL_GPIO_readPins(GPIOA, ENCODERs_LA_PIN)) {
+                        g_leftEncoderCount++;
+                    } else {
+                        g_leftEncoderCount--;
+                    }
+                    DL_GPIO_clearInterruptStatus(GPIOA, ENCODERs_LB_PIN);
+                    break;
+
+                case ENCODERs_RA_IIDX:
+                    if (DL_GPIO_readPins(GPIOB, ENCODERs_RB_PIN)) {
+                        g_rightEncoderCount++;
+                    } else {
+                        g_rightEncoderCount--;
+                    }
+                    DL_GPIO_clearInterruptStatus(GPIOA, ENCODERs_RA_PIN);
+                    break;
+
+                default:
+                    break;
+            }
+            break;
         #endif
 
+        /* ====== GPIOB 中断分派 (传感器 + 编码器) ====== */
         #if defined GPIO_MULTIPLE_GPIOB_INT_IIDX
         case GPIO_MULTIPLE_GPIOB_INT_IIDX:
             switch (DL_GPIO_getPendingInterrupt(GPIOB))
@@ -166,9 +232,38 @@ void GROUP1_IRQHandler(void)
                     break;
                 #endif
 
+                /* ====== 编码器 GPIOB 中断 (RB=PB27) ====== */
+                case ENCODERs_RB_IIDX:
+                    if (DL_GPIO_readPins(GPIOA, ENCODERs_RA_PIN)) {
+                        g_rightEncoderCount++;
+                    } else {
+                        g_rightEncoderCount--;
+                    }
+                    DL_GPIO_clearInterruptStatus(GPIOB, ENCODERs_RB_PIN);
+                    break;
+
                 default:
                     break;
             }
+            break;
+        #elif defined ENCODERs_GPIOB_INT_IIDX
+        /* 仅编码器使用 GPIOB 中断 (GPIO_MULTIPLE 未定义时) */
+        case ENCODERs_GPIOB_INT_IIDX:
+            switch (DL_GPIO_getPendingInterrupt(GPIOB))
+            {
+                case ENCODERs_RB_IIDX:
+                    if (DL_GPIO_readPins(GPIOA, ENCODERs_RA_PIN)) {
+                        g_rightEncoderCount++;
+                    } else {
+                        g_rightEncoderCount--;
+                    }
+                    DL_GPIO_clearInterruptStatus(GPIOB, ENCODERs_RB_PIN);
+                    break;
+
+                default:
+                    break;
+            }
+            break;
         #endif
 
         #if defined GPIO_MPU6050_INT_IIDX
