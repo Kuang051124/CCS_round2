@@ -65,8 +65,8 @@ uint8_t target_succeed_max = 5;
 
 uint8_t param_index = 0;
 
-uint32_t last_time = 0; // 记录上一次时间
-uint32_t curr_time = 0; // 记录现在时间
+unsigned long last_time = 0; // 记录上一次时间
+unsigned long curr_time = 0; // 记录现在时间
 
 bool flag; // 状态机中只执行一次
 
@@ -264,7 +264,7 @@ void Page_Calib() {
   sprintf(oled_buffer, "RDuty:%4.2f", turn_left_1_right_duty);
   OLED_ShowString(6, i++, (uint8_t *)oled_buffer, 8);
 
-  sprintf(oled_buffer, "Delay:%4d", turn_left_1_delay);
+  sprintf(oled_buffer, "Delay:%4lu", turn_left_1_delay);
   OLED_ShowString(6, i++, (uint8_t *)oled_buffer, 8);
 
   sprintf(oled_buffer, "Sceds:%4d", turn_left_1_succeed_times);
@@ -1388,6 +1388,7 @@ void K230_INST_IRQHandler(void) {
   switch (DL_UART_Main_getPendingInterrupt(K230_INST)) {
   case DL_UART_MAIN_IIDX_RX:
     echo_data = DL_UART_Main_receiveDataBlocking(K230_INST);
+    DL_GPIO_togglePins(LED_PORT, LED_RED_PIN);
     Pto_Data_Receive(echo_data);
     // DL_UART_Main_transmitDataBlocking(PC_INST, echo_data);
     break;

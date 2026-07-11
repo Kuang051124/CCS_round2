@@ -15,5 +15,9 @@
 #include "wit.h"
 #include "vl53l0x.h"
 #include "lsm6dsv16x.h"
+#include "ZDT_X42S/zdt_x42s.h"
+
+extern ZDT_HandleTypeDef motor1;
+extern ZDT_HandleTypeDef motor2;
 
 #endif  /* #ifndef _MAIN_H_ */

@@ -71,6 +71,7 @@
                                     <listOptionValue value="${PROJECT_ROOT}/Drivers/MSPM0"/>
                                     <listOptionValue value="${PROJECT_ROOT}/Keyboard"/>
                                     <listOptionValue value="${PROJECT_ROOT}/Slave_Control"/>
+                                    <listOptionValue value="D:\Ti\Project\Target copy\BLUETOOTH"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.GENERATE_DWARF_DEBUG.1408442180" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.GENERATE_DWARF_DEBUG" value="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.GENERATE_DWARF_DEBUG.GDWARF_3" valueType="enumerated"/>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.CMD_FILE.829346627" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.CMD_FILE" valueType="stringList">
@@ -117,7 +118,8 @@
                         </toolChain>
                     </folderInfo>
                     <sourceEntries>
-                        <entry excluding="Drivers/BNO08X_UART_RVC|Drivers/LSM6DSV16X|Drivers/MPU6050|Drivers/OLED_Hardware_SPI|Drivers/OLED_Software_I2C|Drivers/Ultrasonic_Capture|Trace8|Drivers/OLED_Software_SPI|Drivers/Ultrasonic_GPIO|Drivers/VL53L0X" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+                        <entry excluding="ZDT_X42S|Test|Pid|Slave_Control|TB6600|Drivers/BNO08X_UART_RVC|Drivers/LSM6DSV16X|Drivers/OLED_Hardware_SPI|Drivers/OLED_Software_I2C|Drivers/Ultrasonic_Capture|Trace8|Drivers/OLED_Software_SPI|Drivers/Ultrasonic_GPIO|Drivers/VL53L0X" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+                        <entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Test/Test2"/>
                     </sourceEntries>
                 </configuration>
             </storageModule>

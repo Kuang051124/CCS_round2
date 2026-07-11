@@ -1,0 +1,159 @@
+/*
+ * pid.h
+ *
+ * 摄像头坐标 PID 跟踪控制
+ * 协议: $31,04,XXX,YYY,FFF,000,000,000#
+ *       FFF=0 目标坐标, FFF=1 激光坐标
+ *
+ * 增量式 PID, 双轴独立控制 (X → motor_x, Y → motor_y)
+ * 内部直接驱动 ZDT_X42S 步进电机, 调用 CameraPID_Track() 即可完成闭环
+ */
+
+#ifndef BSP_PID_PID_H_
+#define BSP_PID_PID_H_
+
+#include "main.h"
+#include "zdt_x42s.h"
+
+/* PID 单轴控制器 */
+typedef struct {
+    float Kp, Ki, Kd;
+    float error[3];       /* e(k), e(k-1), e(k-2) */
+    float output;         /* 本次增量 Δu */
+    float integral;       /* 积分累加 */
+    float out_max;        /* 输出上限 (像素) */
+} PID_Axis;
+
+/* 摄像头 PID 跟踪器 */
+typedef struct {
+    /* PID 两轴 */
+    PID_Axis pid_x;
+    PID_Axis pid_y;
+
+    /* 绑定的电机 */
+    ZDT_HandleTypeDef *motor_x;   /* X 轴电机 */
+    ZDT_HandleTypeDef *motor_y;   /* Y 轴电机 */
+
+    /* 电机运动参数 (SetMotorParams 设定一次, Track 复用) */
+    uint16_t motor_speed;         /* RPM */
+    uint8_t  motor_acc;           /* 加速度档位 */
+
+    /* 最新坐标 */
+    uint16_t target_x, target_y;
+    uint16_t laser_x, laser_y;
+
+    /* 数据更新标志 */
+    uint8_t target_updated;
+    uint8_t laser_updated;
+    uint8_t both_ready;         /* 目标和激光都收到过至少一次 */
+
+    /* 像素 → 脉冲 比例 (pulses per pixel) */
+    float scale_x, scale_y;
+
+    /* 死区 (像素) */
+    uint16_t deadband;
+
+    /* 串口协议解析缓冲区 */
+    char rx_buf[48];
+    uint8_t rx_idx;
+    uint8_t frame_done;
+} CameraPID;
+
+/* 外部全局实例, 在 pid.c 中定义 */
+extern CameraPID g_pid;
+
+/* ========== 初始化 ========== */
+void CameraPID_Init(void);
+
+/* 绑定两个 ZDT 电机 (必须在 Init 后调用) */
+void CameraPID_AttachMotors(ZDT_HandleTypeDef *motor_x,
+                            ZDT_HandleTypeDef *motor_y);
+
+/* 设定电机运动参数: 速度 / 加速度 (Track 内部会先发 SetParams 再发 Move) */
+void CameraPID_SetMotorParams(uint16_t speed_rpm, uint8_t acc);
+
+/* 设置 PID 参数 (两轴可独立) */
+void CameraPID_SetTunings(float kp_x, float ki_x, float kd_x,
+                          float kp_y, float ki_y, float kd_y);
+
+/* 设置像素→脉冲比例 和 输出上限 */
+void CameraPID_SetScale(float sx, float sy, float out_max);
+
+/* 设置死区 (像素, 误差小于此值不输出) */
+void CameraPID_SetDeadband(uint16_t pixels);
+
+/* ========== 协议解析 ========== */
+
+/* 喂入 UART 收到的单个字节, 内部做帧解析 */
+void CameraPID_FeedByte(uint8_t byte);
+
+/* 从串口轮询读取并解析 (在 main 循环中调用) */
+void CameraPID_PollUART(void);
+
+/* ========== PID 计算 (不驱动电机, 仅返回修正量) ========== */
+
+/* 执行一次增量 PID, 返回 1 表示有新修正量 (≤死区时返回 0) */
+uint8_t CameraPID_Compute(int32_t *corr_x, int32_t *corr_y);
+
+/* ========== 一键跟踪 (轮询 + 计算 + 驱动电机) ========== */
+
+/*
+ * 主循环中只调这一个即可:
+ *   while (tracking) { CameraPID_Track(); HAL_Delay(5); }
+ *
+ * 内部流程:
+ *   1. PollUART    → 读摄像头数据
+ *   2. Compute     → 增量 PID 算修正量 (像素)
+ *   3. 像素→脉冲   → 乘以 scale
+ *   4. FastPosMove → 正脉冲=CCW, 负脉冲=CW, 直接发给对应电机
+ */
+void CameraPID_Track(void);
+
+/* ========== 迷宫路径 ========== */
+
+#define MAZE_MAX_POINTS  100
+
+typedef struct {
+    uint16_t x, y;
+} MazePoint;
+
+/* 开始录制: 清空路径, 之后收到的所有目标帧(FFF=0)自动追加为路径点 */
+void CameraPID_StartRecord(void);
+
+/* 结束录制并锁定路径, 之后目标帧恢复为普通更新 (不追加) */
+void CameraPID_FinishRecord(void);
+
+/* 加载路径点序列 (用代码预设的路径, 与录制二选一) */
+void CameraPID_LoadPath(const MazePoint *points, uint8_t count);
+
+/* 迷宫跟踪主函数: 持续调用, 内部自动切换目标点
+   返回: 0=跟踪中, 1=到达当前点(需蜂鸣0.5s), 2=全部完成(需蜂鸣2s) */
+uint8_t CameraPID_MazeTrack(void);
+
+/* 读取进度: cur=当前第几点(1开始), total=总点数 */
+void CameraPID_GetMazeProgress(uint8_t *cur, uint8_t *total);
+
+/* ========== 识别数据 (FFF=2数字, FFF=3图形, FFF=4动物) ========== */
+
+#define RECOG_MAX_ITEMS  12
+
+typedef struct {
+    uint8_t  flag;       /* 2=数字, 3=图形, 4=动物 */
+    uint16_t x, y;       /* 坐标 */
+    uint16_t val;        /* 数字值 / 颜色码(1红2黄3绿4蓝) */
+    uint16_t val2;       /* 图形码(1三角2方3圆) / 动物码 */
+    uint8_t  updated;    /* 新数据标志 */
+} RecogItem;
+
+extern RecogItem g_recog;           /* 最新识别结果 */
+extern RecogItem g_items[RECOG_MAX_ITEMS];  /* 收集列表 (task3) */
+extern uint8_t  g_item_count;       /* 已收集数量 */
+extern uint8_t  g_item_new;         /* 有新条目待处理 */
+
+/* 清空收集列表 */
+void CameraPID_ClearItems(void);
+
+/* FFF=4 终点目标标志 (由 ParseFrame 置位, main.c 读取) */
+extern uint8_t g_endpoint_ready;
+
+#endif /* BSP_PID_PID_H_ */

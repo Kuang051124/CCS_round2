@@ -1,0 +1,8 @@
+接线表
+矩阵信号	MSPM0 引脚	IOMUX	方向	说明
+行1 (R1)	PA17	PINCM39	输出	扫描时拉低
+行2 (R2)	PA9	PINCM20	输出	扫描时拉低
+行3 (R3)	PB13	PINCM30	输出	扫描时拉低
+列1 (C1)	PA16	PINCM38	输入	读按键状态
+列2 (C2)	PA14	PINCM36	输入	读按键状态
+列3 (C3)	PA12	PINCM34	输入	读按键状态

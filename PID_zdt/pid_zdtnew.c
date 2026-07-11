@@ -1,0 +1,628 @@
+/*
+ * pid_zdtnew.c
+ *
+ * 摄像头坐标 PID 跟踪控制实现 (MSPM0G3507 移植版)
+ * 协议帧格式: $31,04,XXX,YYY,FFF,000,000,000#
+ *
+ * 移植自 STM32 pid_zdt (PID_zdt/pid_zdt.c)
+ *
+ * 移植变更:
+ *   HAL_UART_Receive_IT()  → 中断由 SysConfig 配置, ISR 中调 CameraPID_UART_ISR()
+ *   HAL_UART_Receive()     → DL_UART_isRXFIFOEmpty() + DL_UART_receiveData()
+ *   HAL_UART_Transmit()    → 不直接使用 (电机驱动走 zdt_x42s)
+ *   HAL_GPIO_WritePin()    → DL_GPIO_setPins() / DL_GPIO_clearPins()
+ *   HAL_GPIO_TogglePin()   → DL_GPIO_togglePins()
+ *   HAL_Delay()            → 用户提供的 delay_ms() (PID 模块不直接调用)
+ */
+
+#include "pid_zdtnew.h"
+#include <stdlib.h>
+#include <string.h>
+
+/* 全局实例 */
+CameraPID g_pid;
+
+/* 内部标志: 电机参数是否已发送过 (Track 首次调用时自动发 SetParams) */
+static uint8_t s_params_sent = 0;
+
+/* 识别数据 */
+RecogItem g_recog;
+RecogItem g_items[RECOG_MAX_ITEMS];
+uint8_t   g_item_count = 0;
+uint8_t   g_item_new   = 0;
+
+uint8_t   g_endpoint_ready = 0;  /* FFF=4 终点目标已收到 */
+
+/* both_ready 持久标志: 双方都至少来过一次即为 1, 不被清零影响 */
+static uint8_t s_target_received = 0;
+static uint8_t s_laser_received  = 0;
+
+/* 迷宫路径 */
+static MazePoint s_path[MAZE_MAX_POINTS];
+static uint8_t   s_path_count    = 0;   /* 总点数 */
+static uint8_t   s_path_index    = 0;   /* 当前目标点索引 (0-based) */
+static uint8_t   s_path_active   = 0;   /* 是否正在走迷宫 */
+static uint8_t   s_arrived       = 0;   /* 到达当前点 (防重复蜂鸣) */
+static uint8_t   s_is_recording  = 0;   /* 录制模式 */
+
+/* ========== 内部: 帧解析 ========== */
+
+/*
+ * 解析一帧完整数据, 格式:
+ *   $31,04,XXX,YYY,FFF,000,000,000#
+ *
+ * 字段示例: "$31,04,362,118,0,000,000,000#"
+ *            ^^ ^^ ^^^ ^^^ ^  (只取这几个)
+ *            |  |   |   |  FFF=0→目标坐标(362,118)
+ *            |  |   |   YYY=118
+ *            |  |   XXX=362
+ *            |  子协议=04
+ *            协议号=31
+ *
+ * FFF=0 → 写入 target_x/y, FFF=1 → 写入 laser_x/y
+ * 两者都至少收到一次后置 both_ready=1, PID 才能开始计算
+ */
+static void CameraPID_ParseFrame(const char *buf)
+{
+    const char *p = buf;
+    uint16_t x = 0, y = 0;
+    uint8_t  flag;
+
+    if (*p != '$') return;
+    p++;
+
+    /* 跳过协议号 */
+    while (*p && *p != ',') p++;
+    if (*p != ',') return;
+    p++;
+
+    /* 跳过子协议 */
+    while (*p && *p != ',') p++;
+    if (*p != ',') return;
+    p++;
+
+    /* 读 XXX (3 位数字, 逐位乘 10 累加) */
+    x = 0;
+    for (int i = 0; i < 3 && *p >= '0' && *p <= '9'; i++, p++)
+        x = x * 10 + (*p - '0');
+    if (*p != ',') return;
+    p++;
+
+    /* 读 YYY */
+    y = 0;
+    for (int i = 0; i < 3 && *p >= '0' && *p <= '9'; i++, p++)
+        y = y * 10 + (*p - '0');
+    if (*p != ',') return;
+    p++;
+
+    /* 读 FFF */
+    if (*p < '0' || *p > '9') return;
+    flag = *p - '0';
+    p++; /* 跳过第一位数, 后面的两位(如有)在读后续字段时自然跳过 */
+
+    if (flag == 0) {
+        /* 目标坐标 */
+        g_pid.target_x = x;
+        g_pid.target_y = y;
+        g_pid.target_updated = 1;
+
+        if (s_is_recording && s_path_count < MAZE_MAX_POINTS) {
+            s_path[s_path_count].x = x;
+            s_path[s_path_count].y = y;
+            s_path_count++;
+        }
+    } else if (flag == 1) {
+        /* 激光坐标 */
+        if (s_is_recording) {
+            CameraPID_FinishRecord();
+        }
+        g_pid.laser_x = x;
+        g_pid.laser_y = y;
+        g_pid.laser_updated = 1;
+    } else if (flag == 2) {
+        /* 数字识别: $31,04,XXX,YYY,2,NNN,000,000# */
+        if (*p != ',') return;
+        p++;
+        uint16_t num = 0;
+        for (int i = 0; i < 3 && *p >= '0' && *p <= '9'; i++, p++)
+            num = num * 10 + (*p - '0');
+
+        /* 直接追加到 g_items[]: 摄像头连续发多帧时 ISR 比主循环快, 必须立刻存 */
+        if (g_item_count < RECOG_MAX_ITEMS) {
+            g_items[g_item_count].flag    = 2;
+            g_items[g_item_count].x       = x;
+            g_items[g_item_count].y       = y;
+            g_items[g_item_count].val     = num;
+            g_items[g_item_count].updated = 1;
+            g_item_count++;
+        }
+        g_recog.flag  = 2;
+        g_recog.x     = x;
+        g_recog.y     = y;
+        g_recog.val   = num;
+        g_recog.updated = 1;
+    } else if (flag == 3) {
+        /* 图形识别: $31,04,XXX,YYY,3,AAA,BBB,CCC#
+                     AAA=预留(跳过), BBB=颜色, CCC=形状 */
+        if (*p != ',') return;
+        p++;
+        /* 跳过 AAA (预留字段) */
+        while (*p >= '0' && *p <= '9') p++;
+        if (*p != ',') return;
+        p++;
+        /* BBB = 颜色码 (1红2黄3绿4蓝) */
+        uint16_t color = 0;
+        for (int i = 0; i < 3 && *p >= '0' && *p <= '9'; i++, p++)
+            color = color * 10 + (*p - '0');
+        if (*p != ',') return;
+        p++;
+        /* CCC = 形状码 (1三角2方3圆) */
+        uint16_t shape = 0;
+        for (int i = 0; i < 3 && *p >= '0' && *p <= '9'; i++, p++)
+            shape = shape * 10 + (*p - '0');
+
+        /* 直接追加到 g_items[] (同上理由) */
+        if (g_item_count < RECOG_MAX_ITEMS) {
+            g_items[g_item_count].flag    = 3;
+            g_items[g_item_count].x       = x;
+            g_items[g_item_count].y       = y;
+            g_items[g_item_count].val     = color;
+            g_items[g_item_count].val2    = shape;
+            g_items[g_item_count].updated = 1;
+            g_item_count++;
+        }
+        g_recog.flag  = 3;
+        g_recog.x     = x;
+        g_recog.y     = y;
+        g_recog.val   = color;   /* 1=红 2=黄 3=绿 4=蓝 */
+        g_recog.val2  = shape;   /* 1=三角 2=方 3=圆 */
+        g_recog.updated = 1;
+    } else if (flag == 4) {
+        /* 终点目标: $31,04,XXX,YYY,4,AAA,BBB,CCC# (AAA/BBB/CCC 预留) */
+        g_pid.target_x = x;
+        g_pid.target_y = y;
+        g_pid.target_updated = 1;
+        g_endpoint_ready = 1;
+
+        /* 录制模式: 终点也加入路径 */
+        if (s_is_recording && s_path_count < MAZE_MAX_POINTS) {
+            s_path[s_path_count].x = x;
+            s_path[s_path_count].y = y;
+            s_path_count++;
+        }
+    }
+
+    /* 持久记录是否收到过, 不被外部清零影响 */
+    if (g_pid.target_updated) s_target_received = 1;
+    if (g_pid.laser_updated)  s_laser_received  = 1;
+    g_pid.both_ready = s_target_received && s_laser_received;
+}
+
+/* ========== 初始化 ========== */
+
+/*
+ * 清零 PID 状态和所有坐标缓存
+ * 默认参数: scale=10 pulse/pixel, deadband=3 pixel
+ * 调用后必须再调 SetTunings 设置 PID 参数, 否则 Kp/Ki/Kd 全为 0
+ *
+ * MSPM0 注意: 此函数不启动 UART 中断接收, 用户需在 SysConfig 中
+ * 配置好摄像头 UART 并启用 RX 中断, 在 ISR 中调用 CameraPID_UART_ISR()
+ */
+void CameraPID_Init(void)
+{
+    memset(&g_pid, 0, sizeof(g_pid));
+    g_pid.scale_x  = 10.0f;   /* 1 像素 ≈ 10 脉冲, 需要按实际机械标定 */
+    g_pid.scale_y  = 10.0f;
+    g_pid.deadband = 3;        /* 3 像素以内不调节, 避免微小抖动导致电机嗡嗡响 */
+    s_target_received = 0;
+    s_laser_received  = 0;
+
+    /* LED 初始化失败指示 (保留兼容, MSPM0 中直接操作 GPIO) */
+#ifdef PID_LED_PORT
+    DL_GPIO_clearPins(PID_LED_PORT, PID_LED_PIN);
+#endif
+}
+
+/*
+ * 设置两轴 PID 参数
+ * 调参顺序建议: 先 Kp, 再加 Kd, 最后补一点点 Ki
+ * 典型初值: Kp=0.6, Ki=0.01, Kd=0.2
+ */
+void CameraPID_SetTunings(float kp_x, float ki_x, float kd_x,
+                          float kp_y, float ki_y, float kd_y)
+{
+    g_pid.pid_x.Kp = kp_x; g_pid.pid_x.Ki = ki_x; g_pid.pid_x.Kd = kd_x;
+    g_pid.pid_y.Kp = kp_y; g_pid.pid_y.Ki = ki_y; g_pid.pid_y.Kd = kd_y;
+}
+
+/*
+ * 标定参数:
+ *   sx, sy = 像素到脉冲的换算比 (需要实测: 发 100 脉冲, 看激光移动多少像素, 倒推)
+ *   out_max = 单次最大修正脉冲数, 太大容易飞车, 太小响应慢
+ */
+void CameraPID_SetScale(float sx, float sy, float out_max)
+{
+    g_pid.scale_x = sx;
+    g_pid.scale_y = sy;
+    g_pid.pid_x.out_max = out_max;
+    g_pid.pid_y.out_max = out_max;
+}
+
+/*
+ * 死区: 像素误差的绝对值 ≤ deadband 时不发修正
+ * 太小 → 电机在目标附近反复微调 (抖)
+ * 太大 → 对不准
+ */
+void CameraPID_SetDeadband(uint16_t pixels)
+{
+    g_pid.deadband = pixels;
+}
+
+/*
+ * 绑定两个 ZDT 电机到 PID 控制器
+ * motor_x → X 轴电机, motor_y → Y 轴电机
+ * 调用后 Track() 内部才能驱动电机
+ */
+void CameraPID_AttachMotors(ZDT_HandleTypeDef *motor_x,
+                            ZDT_HandleTypeDef *motor_y)
+{
+    g_pid.motor_x = motor_x;
+    g_pid.motor_y = motor_y;
+    s_params_sent = 0;  /* 换电机了, 参数需要重发 */
+}
+
+/*
+ * 设定电机运动参数, Track 内部首次调用时会自动发 SetParams
+ * 之后每次 Move 只发 7 字节脉冲指令, 不再重复设参
+ */
+void CameraPID_SetMotorParams(uint16_t speed_rpm, uint8_t acc)
+{
+    g_pid.motor_speed = speed_rpm;
+    g_pid.motor_acc   = acc;
+    s_params_sent = 0;  /* 参数变了, 下次 Track 重发 */
+}
+
+/* ========== 协议解析 ========== */
+
+/*
+ * 逐字节喂入解析器
+ *
+ * 典型用法 1 — UART 中断中调用:
+ *   void PID_CAMERA_UART_IRQHandler(void) {
+ *       CameraPID_UART_ISR();
+ *   }
+ *
+ * 典型用法 2 — 主循环轮询 (需周期性调 PollUART):
+ *   见 CameraPID_PollUART()
+ *
+ * 状态机:
+ *   等待 '$' → 开始缓冲 → 收到 '#' 或 '\n' → 解析整帧
+ *   中途如果又收到 '$', 丢弃之前的半帧重新开始
+ *   没收到 '$' 前的所有字节一律丢弃
+ */
+void CameraPID_FeedByte(uint8_t byte)
+{
+    /* '$' 是新帧开始, 无论之前缓冲了什么一律清空 */
+    if (byte == '$') {
+        g_pid.rx_idx = 0;
+        g_pid.frame_done = 0;
+        g_pid.rx_buf[g_pid.rx_idx++] = (char)byte;
+        return;
+    }
+
+    /* 还没收到 '$', 丢弃所有字节防止脏数据混入 */
+    if (g_pid.rx_idx == 0) return;
+
+    /* 有 '$' 前缀, 追加到缓冲区 (防溢出) */
+    if (g_pid.rx_idx < sizeof(g_pid.rx_buf) - 1) {
+        g_pid.rx_buf[g_pid.rx_idx++] = (char)byte;
+    }
+
+    /* 帧结束符: '#' 是标准结束, '\n' 是可选的换行兼容 */
+    if (byte == '#' || byte == '\n') {
+        g_pid.rx_buf[g_pid.rx_idx] = '\0';
+        CameraPID_ParseFrame(g_pid.rx_buf);
+        g_pid.rx_idx = 0;
+        g_pid.frame_done = 1;
+    }
+}
+
+/*
+ * UART 中断服务函数
+ *
+ * 在摄像头 UART 的 ISR 中调用此函数, 自动从 RX FIFO 读取所有可用字节
+ * 并喂给 FeedByte 进行帧解析。
+ *
+ * 使用方式 (放在对应的 UART_IRQHandler 中):
+ *   void PID_CAMERA_UART_IRQHandler(void) {
+ *       CameraPID_UART_ISR();
+ *   }
+ *
+ * 此函数内部使用 DL_UART_isRXFIFOEmpty + DL_UART_receiveData 循环读取,
+ * 适用于 Main (UART0/1/2) 和 Extend (UART3+) 所有 UART 实例。
+ */
+void CameraPID_UART_ISR(void)
+{
+    while (!DL_UART_isRXFIFOEmpty(PID_CAMERA_UART)) {
+        uint8_t ch = DL_UART_receiveData(PID_CAMERA_UART);
+        CameraPID_FeedByte(ch);
+#ifdef PID_LED_PORT
+        DL_GPIO_togglePins(PID_LED_PORT, PID_LED_PIN);  /* LED 翻转指示收数据 */
+#endif
+    }
+}
+
+/*
+ * 在 main 循环中轮询摄像头 UART, 非阻塞
+ *
+ * 使用场景: 摄像头 UART 未配置中断, 或作为中断模式的后备。
+ * 推荐: 优先使用中断模式 (CameraPID_UART_ISR), 轮询模式作为调试备选。
+ *
+ * 注意: 调用频率需 ≥ 帧率 × 每帧字节数, 否则可能丢帧。
+ *       例如 100Hz × ~24 字节/帧 = 需 ≥ 2400 次/秒
+ */
+void CameraPID_PollUART(void)
+{
+    while (!DL_UART_isRXFIFOEmpty(PID_CAMERA_UART)) {
+        CameraPID_FeedByte(DL_UART_receiveData(PID_CAMERA_UART));
+    }
+}
+
+/* ========== PID 计算 ========== */
+
+/*
+ * 增量式 PID 单轴计算
+ *
+ * 公式: Δu = Kp×[e(k)-e(k-1)] + Ki×e(k) + Kd×[e(k)-2×e(k-1)+e(k-2)]
+ *
+ * 输入 e(k) = 本次像素误差 (target - laser)
+ * 输出 Δu   = 本次修正增量 (不是绝对位置, 是变化量)
+ *
+ * error[0]=e(k), error[1]=e(k-1), error[2]=e(k-2) 组成滑动窗口
+ * 每次调用先滑动: e(k-2)←e(k-1)←e(k)←新误差
+ *
+ * 为什么用增量式而非位置式:
+ *   - 输出天然是变化量, 配合 ZDT_MODE_REL_CURRENT 发脉冲
+ *   - 无需维护历史积分值, 不会积分饱和
+ *   - 摄像头数据中断/丢帧也不至于输出突变
+ */
+static float PID_Update(PID_Axis *pid, int16_t error)
+{
+    /* 滑动误差窗口 */
+    pid->error[2] = pid->error[1];   /* e(k-2) ← e(k-1) */
+    pid->error[1] = pid->error[0];   /* e(k-1) ← e(k)   */
+    pid->error[0] = (float)error;   /* e(k)   ← 本次误差 */
+
+    /* 三项分别计算便于调试, 可在调试器里看各分量贡献 */
+    float p_term = pid->Kp * (pid->error[0] - pid->error[1]);
+    float i_term = pid->Ki *  pid->error[0];
+    float d_term = pid->Kd * (pid->error[0] - 2.0f * pid->error[1] + pid->error[2]);
+    float delta  = p_term + i_term + d_term;
+
+    /* 限幅: 单次修正量不超过 out_max */
+    if (delta >  pid->out_max) delta =  pid->out_max;
+    if (delta < -pid->out_max) delta = -pid->out_max;
+
+    return delta;  /* 返回 float, 截断放在乘 scale 之后 */
+}
+
+/*
+ * 执行一次增量 PID, 输入像素误差, 输出电机脉冲修正量
+ *
+ * 调用时机: 每次 CameraPID_PollUART() 之后调用
+ *
+ * 返回 0 的情况:
+ *   1. both_ready==0        目标和激光还没都收到过
+ *   2. X 和 Y 误差都在死区内  无需调节
+ *
+ * 返回 1: corr_x / corr_y 不为 0, 应该立刻发给对应电机
+ */
+uint8_t CameraPID_Compute(int32_t *corr_x, int32_t *corr_y)
+{
+    *corr_x = 0;
+    *corr_y = 0;
+
+    /* 必须目标和激光都收到过才能算误差 */
+    if (!g_pid.both_ready) return 0;
+
+    /* 坐标没刷新时跳过: 防止在相同误差上反复跑 PID
+       导致 P 项和 D 项归零, 只剩 I 项发微小脉冲, 电机看起来不动 */
+    if (!g_pid.laser_updated && !g_pid.target_updated)
+        return 0;
+
+    /* 像素误差: error > 0 表示激光偏左/偏下, 电机需正方向移动 */
+    int16_t err_x = (int16_t)g_pid.target_x - (int16_t)g_pid.laser_x;
+    int16_t err_y = (int16_t)g_pid.target_y - (int16_t)g_pid.laser_y;
+
+    /* 双轴同时在死区内 → 不动 */
+    if (abs(err_x) <= (int16_t)g_pid.deadband &&
+        abs(err_y) <= (int16_t)g_pid.deadband)
+        return 0;
+
+    /* 增量 PID: 算出两个轴的修正量 (float 像素, 保留小数) */
+    float du_x = PID_Update(&g_pid.pid_x, err_x);
+    float du_y = PID_Update(&g_pid.pid_y, err_y);
+
+    /* 像素 → 脉冲, 乘以 scale 后再截断, 避免 < 1 像素的小修正被吃掉 */
+    *corr_x = (int32_t)(du_x * g_pid.scale_x);
+    *corr_y = (int32_t)(du_y * g_pid.scale_y);
+
+    /* 清零标志, 等待下一帧摄像头数据刷新 */
+    g_pid.target_updated = 0;
+    g_pid.laser_updated  = 0;
+
+    return 1;
+}
+
+/* ========== 一键跟踪 ========== */
+
+/*
+ * 主循环中只调这一个函数即可完成全部闭环:
+ *
+ *   while (tracking) {
+ *       CameraPID_Track();
+ *       delay_ms(5);   // ~200Hz, 使用项目中的延时函数
+ *   }
+ *
+ * 内部流程:
+ *   1. 中断收字节    → 摄像头 UART 中断自动喂 FeedByte, 更新 target/laser
+ *   2. Compute       → 增量 PID 算像素修正量
+ *   3. 像素 → 脉冲   → 乘以 scale_xy
+ *   4. SetParams     → 首次或参数变更时发送一次 (8 字节)
+ *   5. FastPosMove   → 修正量直接发给电机 (7 字节/轴)
+ *
+ * 正负方向:
+ *   corr > 0 → 电机 CCW 方向移动
+ *   corr < 0 → 电机 CW  方向移动
+ *   如果实际运动方向反了, 将对应轴的 scale 取负值即可
+ *
+ * 注意: 此函数假设 UART 中断已在后台运行 (SysConfig + NVIC_EnableIRQ)。
+ *       如果中断未配置, 需在主循环中额外调用 CameraPID_PollUART()。
+ */
+void CameraPID_Track(void)
+{
+    /* 步骤 1: 中断已在后台收字节并更新 target/laser */
+
+    /* 步骤 2+3: 增量 PID + 像素转脉冲 */
+    int32_t corr_x, corr_y;
+    if (!CameraPID_Compute(&corr_x, &corr_y))
+        return;  /* 数据未就绪 或 在死区内 */
+
+    /* 步骤 4: 首次调用或参数变更后, 给两个电机各发一次 SetParams */
+    if (!s_params_sent) {
+        if (g_pid.motor_x && g_pid.motor_y) {
+            ZDT_FastPosSetParams(g_pid.motor_x, g_pid.motor_speed,
+                                 g_pid.motor_acc, ZDT_MODE_REL_CURRENT);
+            ZDT_FastPosSetParams(g_pid.motor_y, g_pid.motor_speed,
+                                 g_pid.motor_acc, ZDT_MODE_REL_CURRENT);
+            s_params_sent = 1;
+        } else {
+            return;  /* 电机未绑定 */
+        }
+    }
+
+    /* 步骤 5: 修正量直接发给电机 (正=CCW, 负=CW) */
+    if (corr_x != 0 && g_pid.motor_x) {
+        ZDT_FastPosMove(g_pid.motor_x, corr_x);
+    }
+    if (corr_y != 0 && g_pid.motor_y) {
+        ZDT_FastPosMove(g_pid.motor_y, corr_y);
+    }
+}
+
+/* ========== 迷宫路径 ========== */
+
+/*
+ * 开始录制: 清空路径, 之后摄像头发来的目标帧自动追加为路径点
+ */
+void CameraPID_StartRecord(void)
+{
+    s_path_count   = 0;
+    s_path_index   = 0;
+    s_path_active  = 0;
+    s_arrived      = 0;
+    s_is_recording = 1;
+}
+
+/*
+ * 结束录制: 锁定路径, 目标帧不再追加
+ */
+void CameraPID_FinishRecord(void)
+{
+    s_is_recording = 0;
+    if (s_path_count > 0) {
+        s_path_active = 1;
+        s_path_index  = 0;
+        s_params_sent = 0;
+        g_pid.target_x = s_path[0].x;
+        g_pid.target_y = s_path[0].y;
+        g_pid.target_updated = 1;
+    }
+}
+
+/*
+ * 加载迷宫路径点序列 (代码硬编码路径, 与录制二选一)
+ * points 必须按先后顺序排列, count 不能超过 MAZE_MAX_POINTS
+ * 加载后目标自动设为第一个点
+ */
+void CameraPID_LoadPath(const MazePoint *points, uint8_t count)
+{
+    if (count > MAZE_MAX_POINTS) count = MAZE_MAX_POINTS;
+    memcpy(s_path, points, count * sizeof(MazePoint));
+    s_path_count  = count;
+    s_path_index  = 0;
+    s_path_active = 1;
+    s_arrived     = 0;
+    s_params_sent = 0;  /* 让 Track 重发电机参数 */
+
+    /* 把第一个目标点写入 g_pid, 这样 CameraPID_Compute 可以用它 */
+    g_pid.target_x = s_path[0].x;
+    g_pid.target_y = s_path[0].y;
+    g_pid.target_updated = 1;
+}
+
+/*
+ * 迷宫跟踪: 内部调用 CameraPID_Track, 自动切换路径点
+ *
+ * 流程:
+ *   1. 把当前目标点坐标写入 g_pid.target_x/y
+ *   2. 调用 Track → Compute → 驱动电机
+ *   3. 检查激光是否到达当前点 (误差在 deadband 内)
+ *   4. 到达 → 切换到下一个点, 返回 1 (蜂鸣 0.5s)
+ *   5. 最后一个点也到达 → 返回 2 (蜂鸣 2s)
+ *
+ * 返回 0 表示还在跟踪当前点, 不做任何事
+ */
+uint8_t CameraPID_MazeTrack(void)
+{
+    if (s_is_recording)  return 0;  /* 录制中, 等待激光帧自动触发 FinishRecord */
+    if (!s_path_active)  return 2;  /* 已完成或无路径 */
+
+    /* 更新目标坐标, 等下一帧激光到达后自然触发 PID */
+    g_pid.target_x = s_path[s_path_index].x;
+    g_pid.target_y = s_path[s_path_index].y;
+
+    /* 跑一次 PID → 电机修正 (有激光新数据才动, 无则跳过) */
+    CameraPID_Track();
+
+    /* 检查是否到达: 仅当激光数据存在且误差在死区内 */
+    if (!g_pid.both_ready) return 0;
+
+    int16_t dx = abs((int16_t)g_pid.target_x - (int16_t)g_pid.laser_x);
+    int16_t dy = abs((int16_t)g_pid.target_y - (int16_t)g_pid.laser_y);
+
+    if (dx <= (int16_t)g_pid.deadband && dy <= (int16_t)g_pid.deadband) {
+        if (!s_arrived) {
+            s_arrived = 1;
+            /* 切到下一个点 */
+            s_path_index++;
+            if (s_path_index >= s_path_count) {
+                s_path_active = 0;
+                return 2;  /* 全部完成 */
+            }
+            return 1;  /* 到达, 切换到下一个 */
+        }
+    } else {
+        s_arrived = 0;  /* 离开当前点范围, 重置以便下次进入时再触发 */
+    }
+
+    return 0;  /* 仍在跟踪 */
+}
+
+/*
+ * 查询进度: cur=当前第几点(1-based), total=总点数
+ */
+void CameraPID_GetMazeProgress(uint8_t *cur, uint8_t *total)
+{
+    *cur   = s_path_index + 1;  /* 转为 1-based */
+    *total = s_path_count;
+}
+
+/* 清空识别收集列表 */
+void CameraPID_ClearItems(void)
+{
+    g_item_count = 0;
+    g_item_new   = 0;
+    memset(g_items, 0, sizeof(g_items));
+    memset(&g_recog, 0, sizeof(g_recog));
+}

@@ -6,6 +6,8 @@
 #include "wit.h"
 #include "vl53l0x.h"
 #include "lsm6dsv16x.h"
+#include "../../yb_protocol/yb_protocol.h"
+#include "BLUETOOTH/bluetooth.h"
 
 uint8_t enable_group1_irq = 0;
 
@@ -188,3 +190,51 @@ void GROUP1_IRQHandler(void)
         #endif
     }
 }
+#if defined K230_INST_IRQHandler
+void K230_INST_IRQHandler(void)
+{
+    switch (DL_UART_Main_getPendingInterrupt(K230_INST)) {
+    case DL_UART_MAIN_IIDX_RX:
+        /* 一次中断清空 FIFO, 115200bps 单字节读会挤死主循环 */
+        while (!DL_UART_Main_isRXFIFOEmpty(K230_INST)) {
+            Pto_Receive_Byte(DL_UART_Main_receiveData(K230_INST));
+        }
+        break;
+    default:
+        break;
+    }
+}
+#endif
+
+/* ====== 蓝牙 UART_BLA (A车) ====== */
+#if defined UART_BLA_INST_IRQHandler
+void UART_BLA_INST_IRQHandler(void)
+{
+    switch (DL_UART_getPendingInterrupt(UART_BLA_INST)) {
+    case DL_UART_IIDX_RX:
+        /* 一次中断清空 FIFO, 防止高频中断挤死主循环 */
+        while (!DL_UART_isRXFIFOEmpty(UART_BLA_INST)) {
+            Bluetooth_RX_ISR(DL_UART_receiveData(UART_BLA_INST));
+        }
+        break;
+    default:
+        break;
+    }
+}
+#endif
+
+#if defined UART_BLB_INST_IRQHandler
+/* ====== 蓝牙 UART_BLB (B车) ====== */
+void UART_BLB_INST_IRQHandler(void)
+{
+    switch (DL_UART_getPendingInterrupt(UART_BLB_INST)) {
+    case DL_UART_IIDX_RX:
+        while (!DL_UART_isRXFIFOEmpty(UART_BLB_INST)) {
+            Bluetooth_RX_ISR(DL_UART_receiveData(UART_BLB_INST));
+        }
+        break;
+    default:
+        break;
+    }
+}
+#endif

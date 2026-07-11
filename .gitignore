@@ -1,0 +1,41 @@
+# ===== 编译产物 =====
+*.o
+*.obj
+*.out
+*.hex
+*.elf
+*.map
+*.a
+*.lib
+*.lst
+*.sym
+*.d
+*.dep
+Debug/
+Release/
+
+# ===== TI CCS / Theia IDE（仅忽略临时文件，工程配置保留）=====
+.launches/
+.ccs/
+.theia/
+.codex/
+
+# ===== 编辑器 & IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ===== 压缩包 =====
+*.rar
+*.zip
+*.7z
+
+# ===== 系统文件 =====
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ===== 日志 =====
+*.log

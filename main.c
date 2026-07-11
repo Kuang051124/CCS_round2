@@ -31,13 +31,23 @@
  */
 
 #include "main.h"
-#include "slave_control.h"
+#include "Test2/pages.h"
+#include "Test2/mode1.h"
+// #include "PID_zdt/pid_store.h"
+// #include "PID_zdt/pid_zdt_speed.h"
 #include "stdio.h"
 #include "tb6600.h"
 #include "tb6612.h"
+#include "Keyboard/keyboard.h"
 #include "ti_msp_dl_config.h"
+#include "bluetooth.h"
 
 uint8_t oled_buffer[32];
+int CAR_ID=1;//1是主车，2为从车
+/* ZDT_X42S 步进电机句柄 (全局, 供各页面调用) */
+// ZDT_HandleTypeDef motor1, motor2;
+
+
 
 int main(void) {
   SYSCFG_DL_init();
@@ -45,18 +55,57 @@ int main(void) {
 
   // MPU6050_Init();
   OLED_Init();
-  WIT_Init();
+  WIT_Init(); 
 
   /* Don't remove this! */
   Interrupt_Init();
   Motor_Init();
-  SMotor_Init();
+  Keyboard_Init();
+  Bluetooth_Init();
+
+  /* 调试: 蓝牙初始化后亮一下 LED */
+  DL_GPIO_setPins(LED_PORT, LED_RED_PIN);
+  mspm0_delay_ms(200);
+  DL_GPIO_clearPins(LED_PORT, LED_RED_PIN);
+
+  // SMotor_Init();
 
   NVIC_EnableIRQ(K230_INST_INT_IRQN);
 
   // DL_GPIO_setPins(LASER_PORT, LASER_PURPLE_PIN);
+  // 步进电机初始化
+  // ZDT_Init(&motor1, UART_ZDT_INST, 1);    // PA26/PA13
+  // ZDT_Init(&motor2, UART_ZDT2_INST, 1);   // PB4/PB5
+
+  /* 从 Flash 加载已保存的 Task1/2 参数 */
+  TKParam_Load();
+
+  /* 速度环跟踪初始化 (与 CameraPID_Track 并存) */
+  // CameraPID_SpeedTrack_Init();
+
+  uint8_t prev_page = 0xFF;
+
+  /* B 车无键盘，上电直接进入工作模式 */
+  if (CAR_ID == 2) {
+      OLED_Clear();
+      OLED_ShowString(0, 0, (uint8_t *)"B-Car Ready", 8);
+      OLED_ShowString(0, 2, (uint8_t *)"Wait Master...", 8);
+  }
 
   for (;;) {
+    /* 蓝牙延迟任务: ISR 内不阻塞, 由主循环发送 ACK 等 */
+    Bluetooth_Poll();
+
+    /* B 车: 永远跑 Page_Test2, 不经过菜单 */
+    if (CAR_ID == 2) {
+        Page_Test2();
+        continue;
+    }
+
+    if (page_state != prev_page) {
+      OLED_Clear();
+      prev_page = page_state;
+    }
     switch (page_state) {
     case 0:
       Page_Home();
@@ -77,6 +126,7 @@ int main(void) {
       Page_Debug_Gyro();
       break;
     case 6:
+      Page_Debug_Camera();
       break;
     default:
       break;

@@ -1,0 +1,68 @@
+初始化
+
+ZDT_HandleTypeDef motor1;  // 电机1 (UART3)
+ZDT_HandleTypeDef motor2;  // 电机2 (UART1)
+
+// 在 main() 中初始化
+ZDT_Init(&motor1, UART_ZDT_INST,  1);   // 地址默认 1
+ZDT_Init(&motor2, UART_ZDT2_INST, 1);   // 地址默认 1
+方式一：快速位置模式（推荐，最简洁）
+
+// 先设参数，再发脉冲 — 适合反复调位置的场景
+ZDT_FastPosSetParams(&motor1, 800, 100, ZDT_MODE_REL_PREV);  // 800RPM, 加速100, 相对模式
+
+ZDT_FastPosMove(&motor1, 3200);    // 转 1 圈正转
+ZDT_FastPosMove(&motor1, 1600);    // 再转半圈
+ZDT_FastPosMove(&motor1, -6400);   // 反转 2 圈
+
+// 或者一步到位：直接按角度运动
+ZDT_FastPosMoveAngle(&motor2, 90.0f, 1000, 50, ZDT_MODE_ABS_ZERO);
+// 电机2 以 1000RPM、加速度50，运动到绝对 90° 位置
+方式二：标准位置模式
+
+// 顺时针 / 逆时针控制
+ZDT_PosCtrl(&motor1, ZDT_DIR_CW,  1500, 80, 3200, ZDT_MODE_REL_CURRENT);
+// 电机1 从当前位置 CW 转 1 圈(3200脉冲)，1500RPM
+
+ZDT_PosCtrl(&motor1, ZDT_DIR_CCW, 800,  60, 1600, ZDT_MODE_ABS_ZERO);
+// 电机1 CCW，以绝对零点为基准运动 1600 脉冲
+方式三：速度模式（持续旋转）
+
+// 电机1 以 1000RPM 顺时针持续转
+ZDT_SpeedCtrl(&motor1, ZDT_DIR_CW, 1000, 120);
+
+// 延时 2 秒...
+
+// 停止：速度设为 0
+ZDT_SpeedCtrl(&motor1, ZDT_DIR_CW, 0, 0);
+回零操作
+
+// 1. 先将电机手动转到物理零点位置
+// 2. 标记零点并存储（只需做一次）
+ZDT_SetHomeZero(&motor1, 1);   // 1=存储到 EEPROM, 掉电不丢失
+
+// 3. 之后每次上电触发回零，电机自动运动到零点
+ZDT_TriggerHome(&motor1, ZDT_HOME_NEAREST);  // 单圈就近回零（最常用）
+
+// 4. 轮询等待回零完成
+uint8_t status;
+do {
+    status = ZDT_ReadHomeStatus(&motor1);
+    if ((status & 0x0C) == 0x08) {
+        // 回零失败，处理错误
+        break;
+    }
+} while ((status & 0x0C) == 0x04);  // 0x04 = 正在回零中
+// status & 0x0C == 0x00  → 回零成功
+完整示例：来回往复运动
+
+// 电机1 先正转 2 圈，延时，再反转 2 圈
+ZDT_FastPosSetParams(&motor1, 1200, 80, ZDT_MODE_REL_PREV);
+
+while (1) {
+    ZDT_FastPosMove(&motor1, 6400);   // 正转 2 圈
+    DL_Delay(2000000);                // 延时 2 秒
+    ZDT_FastPosMove(&motor1, -6400);  // 反转 2 圈
+    DL_Delay(2000000);                // 延时 2 秒
+}
+关键点：用 快速位置模式 最省事，参数设一次就行；速度模式 适合需要持续旋转的场景；回零记得先 SetHomeZero 标零点。
