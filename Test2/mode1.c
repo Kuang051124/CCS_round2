@@ -308,15 +308,9 @@ void BEEP_TIM_INST_IRQHandler(void)
 
 static void tk_arrive_at_point(const char *name, uint32_t beep_ms)
 {
-    // MOTOR_ALL_STOP();
+    /* 不 STOP 马达, 不清 OLED (下一帧 tk_enter_segment 会刷新) */
     tk_points_passed++;
-    OLED_Clear();
-    char buf[21];
-    sprintf(buf, "Arrived: %c", name[0]);
-    OLED_ShowString(0, 1, (uint8_t *)buf, 8);
-    sprintf(buf, "Passed:%d", tk_points_passed);
-    OLED_ShowString(0, 7, (uint8_t *)buf, 8);
-    tk_beep(beep_ms); 
+    tk_beep(beep_ms);   /* 非阻塞声光 */
 }
 
 /* ===================================================================
@@ -373,6 +367,12 @@ static uint8_t tk_detect_arc_end(void)
     if (delta < -180.0f) delta += 360.0f;
 
     uint8_t yaw_ok = 0;
+
+    /* Task3 B车最后一段弧永不结束: 等蓝牙STOP, 不走弧线终点判定 */
+    if (tk_path == task3b_path && tk_seg_index == tk_seg_count - 1) {
+        return 0;
+    }
+
     /* 路径前半段的弧是"远离起点", 后半段的弧是"接近起点" */
     if (tk_seg_index < (tk_seg_count / 2)) {
         /* 第一段弧: 远离初始点, 航向变化需 ≥160° */
@@ -787,7 +787,8 @@ void tk_abort(void)
 }
 
 uint8_t tk_is_done(void) { return (tk_state == TASK_DONE); }
-uint8_t tk_get_seg_index(void) { return tk_seg_index; }
+uint8_t tk_get_seg_index(void)  { return tk_seg_index; }
+float   tk_get_initial_yaw(void) { return tk_initial_yaw; }
 
 /* ---- 对外 Task1/2 Tick 入口 (WIT 陀螺仪) ---- */
 uint8_t Task1_Tick(uint8_t key) { return task_tick(key); }

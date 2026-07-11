@@ -29,7 +29,7 @@
 #define T1_GYRO_SAMPLE_MS    10     /* 航向采样间隔: 每次采样间隔N ms                      */
 #define T1_BEEP_MS           1000   /* 途经顶点蜂鸣时长 (ms)                               */
 #define T1_STOP_BEEP_MS      800    /* 任务完成蜂鸣时长 (ms)                               */
-#define T1_MAX_TIME_SEC      50     /* 任务超时上限 (秒), Task1≤30s / Task2≤40s 共用此值   */
+#define T1_MAX_TIME_SEC      100     /* 任务超时上限 (秒), Task1≤30s / Task2≤40s 共用此值   */
 
 /* ===================================================================
  * 几何常量
@@ -146,7 +146,8 @@ void task_init(const PathSeg *path, uint8_t seg_count);
 uint8_t task_tick(uint8_t key);
 void tk_abort(void);   /* 强制停止任务 (B车用, 不阻塞键盘) */
 uint8_t tk_is_done(void); /* 任务是否已完成 (TASK_DONE状态) */
-uint8_t tk_get_seg_index(void); /* 获取当前段下标 */
+uint8_t tk_get_seg_index(void);    /* 获取当前段下标           */
+float   tk_get_initial_yaw(void);   /* 获取任务启动时的初始航向  */
 
 /* ===================================================================
  * 参数持久化 (Flash 扇区 126)
