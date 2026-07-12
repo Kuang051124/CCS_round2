@@ -29,7 +29,7 @@
 #define T1_GYRO_SAMPLE_MS    10     /* 航向采样间隔: 每次采样间隔N ms                      */
 #define T1_BEEP_MS           1000   /* 途经顶点蜂鸣时长 (ms)                               */
 #define T1_STOP_BEEP_MS      800    /* 任务完成蜂鸣时长 (ms)                               */
-#define T1_MAX_TIME_SEC      50     /* 任务超时上限 (秒), Task1≤30s / Task2≤40s 共用此值   */
+#define T1_MAX_TIME_SEC      100     /* 任务超时上限 (秒), Task1≤30s / Task2≤40s 共用此值   */
 
 /* ===================================================================
  * 几何常量
@@ -71,7 +71,7 @@
 #define SEG_STRAIGHT       0    /* 直线: 陀螺仪保持, 巡线终点检测      */
 #define SEG_ARC_CW         1    /* 顺时针弧: 巡线 + CW偏移            */
 #define SEG_ARC_CCW        2    /* 逆时针弧: 巡线 + CCW偏移           */
-#define SEG_STRAIGHT_DELAY 3    /* 直线: 陀螺仪保持, 延时终点 (Task4用) */
+#define SEG_STRAIGHT_DELAY 3    /* 直线: 陀螺仪保持, 编码器计数值判定终点 (Task4用) */
 
 #define GYRO_SRC_WIT    0    /* WIT 串口陀螺仪 */
 #define GYRO_SRC_MPU    1    /* MPU6050 I2C + DMP  */
@@ -103,9 +103,6 @@ extern float tk_speed_mult;
 /* 超车航向偏置: 叠加到目标航向, 0=无偏置/正常行驶 */
 extern float tk_heading_bias;
 
-/* 直线段延时终点: >0=用延时(ms)替代巡线检测, 0=正常巡线 (Task4 delay段用) */
-extern uint32_t tk_seg_delay_ms;
-
 /* ===================================================================
  * 路径段描述
  * =================================================================== */
@@ -116,6 +113,7 @@ typedef struct {
                                    0=采样当前航向 */
     const char *name;           /* OLED 显示段名 */
     const char *target;         /* 目标点 */
+    uint8_t     is_return;      /* 弧线段: 0=远离起点(delta大), 1=接近起点(delta小) */
 } PathSeg;
 
 /* ===================================================================
@@ -146,7 +144,8 @@ void task_init(const PathSeg *path, uint8_t seg_count);
 uint8_t task_tick(uint8_t key);
 void tk_abort(void);   /* 强制停止任务 (B车用, 不阻塞键盘) */
 uint8_t tk_is_done(void); /* 任务是否已完成 (TASK_DONE状态) */
-uint8_t tk_get_seg_index(void); /* 获取当前段下标 */
+uint8_t tk_get_seg_index(void);    /* 获取当前段下标           */
+float   tk_get_initial_yaw(void);   /* 获取任务启动时的初始航向  */
 
 /* ===================================================================
  * 参数持久化 (Flash 扇区 126)

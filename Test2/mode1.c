@@ -13,12 +13,14 @@
  */
 
 #include "mode1.h"
+#include "task4.h"
 #include "../Trace5/trace.h"
 #include "../TB6612/tb6612.h"
 #include "../Drivers/WIT/wit.h"
 #include "../Drivers/MPU6050/mpu6050.h"
 #include "../Drivers/MSPM0/clock.h"
 #include "../Keyboard/keyboard.h"
+#include "../ENCODER/encoder.h"
 #include "ti_msp_dl_config.h"
 #include "pages.h"
 
@@ -143,10 +145,10 @@ void TKParam_Save(void)
  * C→D = 初始航向 + 180° (A→B 的反方向, BC弧转了半圈后正好沿此方向)
  */
 const PathSeg task1_path[TASK1_SEG_COUNT] = {
-    {SEG_STRAIGHT, T1_HEADING_AB, "A->B Str", "B"},
-    {SEG_ARC_CW,   0,             "BC Arc",   "C"},
-    {SEG_STRAIGHT, T1_HEADING_CD, "C->D Str", "D"},
-    {SEG_ARC_CW,   0,             "DA Arc",   "A"},
+    {SEG_STRAIGHT, T1_HEADING_AB, "A->B Str", "B", 0},
+    {SEG_ARC_CW,   0,             "BC Arc",   "C", 0},
+    {SEG_STRAIGHT, T1_HEADING_CD, "C->D Str", "D", 0},
+    {SEG_ARC_CW,   0,             "DA Arc",   "A", 1},
 };
 
 /*
@@ -158,30 +160,28 @@ const PathSeg task1_path[TASK1_SEG_COUNT] = {
  *   B→D: 目标 = init - 180° + atan0.8  (反向偏回)
  */
 const PathSeg task2_path[TASK2_SEG_COUNT] = {
-    {SEG_STRAIGHT, T2_HEADING_AC,  "A->C Str", "C"},   /* heading = init + atan0.8  */
-    {SEG_ARC_CCW,  0,              "CB Arc",   "B"},   /* CCW弧, ofsCCW            */
-    {SEG_STRAIGHT, T2_HEADING_BD,  "B->D Str", "D"},   /* heading = init+180-atan0.8 */
-    {SEG_ARC_CW,   0,              "DA Arc",   "A"},   /* CW弧, ofsCW              */
+    {SEG_STRAIGHT, T2_HEADING_AC,  "A->C Str", "C", 0},
+    {SEG_ARC_CCW,  0,              "CB Arc",   "B", 0},
+    {SEG_STRAIGHT, T2_HEADING_BD,  "B->D Str", "D", 0},
+    {SEG_ARC_CW,   0,              "DA Arc",   "A", 1},
 };
 
 /*
  * B车 Task3 路径: D → DA弧(CW) → A → A→C(直) → C → CB弧(CCW) → B → B→D(直) → D → DA弧(CW) → (追A,等STOP)
  *
  * 右转=yaw减小, 初始yaw在D点记录
- *   DA弧:  CW绕半圈 yaw减小 ~180° 到达A
- *   A→C:   目标 = init - 180° - atan0.8  (经过DA弧后在A点右偏)
- *   CB弧:   CCW绕半圈 yaw增大 ~180° 到达B
- *   B→D:   目标 = init + atan0.8         (返回D方向)
- *   DA弧2: CW绕半圈 yaw减小 ~180° → yaw回到~init, 弧线终点判定永不触发, 等STOP
- *
- *   弧线终点判定: seg0 远离(yaw≥160°) ✓, seg2 接近(yaw≈0°≤20°) ✓, seg4 接近(yaw≈180°>20°) ✗永不触发
+ *   DA弧:   CW绕半圈 yaw减小 ~180° 到达A                       is_return=0 (远离)
+ *   A→C:    目标 = init - 180° - atan0.8  (经过DA弧后在A点右偏)
+ *   CB弧:    CCW绕半圈 yaw增大 ~180° 到达B                      is_return=0 (远离)
+ *   B→D:    目标 = init + atan0.8         (返回D方向)
+ *   DA弧2:  CW绕半圈 yaw减小 ~180°, is_return=1 (接近) + line372拦截永不触发, 等STOP
  */
 const PathSeg task3b_path[TASK3B_SEG_COUNT] = {
-    {SEG_ARC_CW,   0,              "DA Arc",   "A"},   /* D→DA弧(CW)→A       */
-    {SEG_STRAIGHT, TB_HEADING_AC,  "A->C Str", "C"},   /* init-180-atan0.8    */
-    {SEG_ARC_CCW,  0,              "CB Arc",   "B"},   /* C→CB弧(CCW)→B      */
-    {SEG_STRAIGHT, TB_HEADING_BD,  "B->D Str", "D"},   /* init+atan0.8        */
-    {SEG_ARC_CW,   0,              "DA Arc2",  "A"},   /* D→DA弧2(CW)→追A    */
+    {SEG_ARC_CW,   0,              "DA Arc",   "A", 0},
+    {SEG_STRAIGHT, TB_HEADING_AC,  "A->C Str", "C", 0},
+    {SEG_ARC_CCW,  0,              "CB Arc",   "B", 1},
+    {SEG_STRAIGHT, TB_HEADING_BD,  "B->D Str", "D", 0},
+    {SEG_ARC_CW,   0,              "DA Arc2",  "A", 0},
 };
 
 /*
@@ -192,11 +192,11 @@ const PathSeg task3b_path[TASK3B_SEG_COUNT] = {
  * 过O点完成路线交叉, 替代旧的 heading_bias 超车方案
  */
 const PathSeg task4a_path[TASK4A_SEG_COUNT] = {
-    {SEG_STRAIGHT_DELAY, TA_HEADING_AO,  "A->O Dly", "O"},
-    {SEG_STRAIGHT_DELAY, TA_HEADING_OB,  "O->B Dly", "B"},
-    {SEG_ARC_CW,         0,              "BC Arc",   "C"},
-    {SEG_STRAIGHT,       T1_HEADING_CD,  "C->D Str", "D"},
-    {SEG_ARC_CW,         0,              "DA Arc",   "A"},
+    {SEG_STRAIGHT_DELAY, TA_HEADING_AO,  "A->O Dly", "O", 0},
+    {SEG_STRAIGHT_DELAY, TA_HEADING_OB,  "O->B Dly", "B", 0},
+    {SEG_ARC_CW,         0,              "BC Arc",   "C", 0},
+    {SEG_STRAIGHT,       T1_HEADING_CD,  "C->D Str", "D", 0},
+    {SEG_ARC_CW,         0,              "DA Arc",   "A", 1},
 };
 
 /*
@@ -206,11 +206,11 @@ const PathSeg task4a_path[TASK4A_SEG_COUNT] = {
  * O→D: TB_HEADING_BD 方向
  */
 const PathSeg task4b_path[TASK4B_SEG_COUNT] = {
-    {SEG_ARC_CW,         0,              "DA Arc",   "A"},
-    {SEG_STRAIGHT,       TB_HEADING_AB,  "A->B Str", "B"},
-    {SEG_ARC_CW,         0,              "BC Arc",   "C"},
-    {SEG_STRAIGHT_DELAY, TB_HEADING_CO,  "C->O Dly", "O"},
-    {SEG_STRAIGHT_DELAY, TB_HEADING_BD,  "O->D Dly", "D"},
+    {SEG_ARC_CW,         0,              "DA Arc",   "A", 0},
+    {SEG_STRAIGHT,       TB_HEADING_AB,  "A->B Str", "B", 0},
+    {SEG_ARC_CW,         0,              "BC Arc",   "C", 1},
+    {SEG_STRAIGHT_DELAY, TB_HEADING_CO,  "C->O Dly", "O", 0},
+    {SEG_STRAIGHT_DELAY, TB_HEADING_BD,  "O->D Dly", "D", 0},
 };
 
 /* ===================================================================
@@ -235,9 +235,6 @@ static task_state_t  tk_state = TASK_IDLE;
 static const PathSeg *tk_path       = NULL;
 static uint8_t        tk_seg_count  = 0;
 static uint8_t        tk_seg_index  = 0;   /* 当前段在 path[] 中的下标 */
-
-/* 直线段延时终点 (ms), 0=正常巡线检测, >0=计时结束 */
-uint32_t tk_seg_delay_ms = 0;
 
 /* 陀螺仪 */
 static float tk_initial_yaw  = 0.0f;   /* 任务启动时的初始航向 */
@@ -308,15 +305,9 @@ void BEEP_TIM_INST_IRQHandler(void)
 
 static void tk_arrive_at_point(const char *name, uint32_t beep_ms)
 {
-    // MOTOR_ALL_STOP();
+    /* 不 STOP 马达, 不清 OLED (下一帧 tk_enter_segment 会刷新) */
     tk_points_passed++;
-    OLED_Clear();
-    char buf[21];
-    sprintf(buf, "Arrived: %c", name[0]);
-    OLED_ShowString(0, 1, (uint8_t *)buf, 8);
-    sprintf(buf, "Passed:%d", tk_points_passed);
-    OLED_ShowString(0, 7, (uint8_t *)buf, 8);
-    tk_beep(beep_ms); 
+    tk_beep(beep_ms);   /* 非阻塞声光 */
 }
 
 /* ===================================================================
@@ -342,14 +333,15 @@ static float tk_get_yaw(void)
     return wit_data.yaw;
 }
 
-/* 直线→弧线: 盲区后首次黑线, 排除悬空全黑; 或延时终点 (Task4) */
+/* 直线→弧线: 盲区后首次黑线; 或编码器到位终点 (Task4 delay段) */
 static uint8_t tk_detect_straight_end(void)
 {
     if (tick_ms - tk_blind_start_ms < T1_STRAIGHT_BLIND_MS) return 0;
 
-    /* 延时终点: 用于 Task4 的 delay 段 (A→O, O→B, C→O, O→D) */
-    if (tk_seg_delay_ms > 0) {
-        return (tick_ms - tk_blind_start_ms >= tk_seg_delay_ms);
+    /* 编码器到位终点: Task4 delay段 (A→O, O→B, C→O, O→D) */
+    if (tk_path[tk_seg_index].type == SEG_STRAIGHT_DELAY) {
+        int32_t avg = (ENCODER_GetLeftCount() + ENCODER_GetRightCount()) / 2;
+        return (avg >= T4_ENCODER_TARGET);
     }
 
     uint8_t cnt = tk_black_count();
@@ -373,12 +365,16 @@ static uint8_t tk_detect_arc_end(void)
     if (delta < -180.0f) delta += 360.0f;
 
     uint8_t yaw_ok = 0;
-    /* 路径前半段的弧是"远离起点", 后半段的弧是"接近起点" */
-    if (tk_seg_index < (tk_seg_count / 2)) {
-        /* 第一段弧: 远离初始点, 航向变化需 ≥160° */
+
+    /* Task3 B车最后一段弧永不结束: 等蓝牙STOP, 不走弧线终点判定 */
+    if (tk_path == task3b_path && tk_seg_index == tk_seg_count - 1) {
+        return 0;
+    }
+
+    /* 弧线段用 is_return 判断: 0=远离起点(delta需大), 1=接近起点(delta需小) */
+    if (!tk_path[tk_seg_index].is_return) {
         yaw_ok = (fabs(delta) >= T1_ARC_YAW_DELTA);
     } else {
-        /* 最后一段弧: 返回初始点, 航向变化需 ≤20° */
         yaw_ok = (fabs(delta) <= (180.0f - T1_ARC_YAW_DELTA));
     }
 
@@ -545,6 +541,8 @@ static void tk_trace_control(float base_speed)
 static void tk_update_yaw_display(void)
 {
     if (tick_ms - tk_yaw_disp_tick < 200) return;
+    /* DELAY段留给 Task4 显示编码器, 不刷 yaw */
+    if (tk_path[tk_seg_index].type == SEG_STRAIGHT_DELAY) return;
     tk_yaw_disp_tick = tick_ms;
 
     char buf[21];
@@ -589,9 +587,10 @@ static void tk_enter_segment(const PathSeg *seg)
         tk_arc_offset = 0.0f;
         tk_set_heading(seg->heading_ofs);
         tk_blind_start_ms = tick_ms;
-        /* SEG_STRAIGHT_DELAY: tk_seg_delay_ms 由外部 (Task4) 设置 */
-        if (seg->type != SEG_STRAIGHT_DELAY) {
-            tk_seg_delay_ms = 0;  /* 正常直线段清 delay */
+        /* SEG_STRAIGHT_DELAY: 清零编码器, 后续用计数值判定终点 */
+        if (seg->type == SEG_STRAIGHT_DELAY) {
+            ENCODER_ResetLeft();
+            ENCODER_ResetRight();
         }
     } else {
         /* 弧线段: 设置弧线偏置方向 + 记录起始航向 */
@@ -787,7 +786,8 @@ void tk_abort(void)
 }
 
 uint8_t tk_is_done(void) { return (tk_state == TASK_DONE); }
-uint8_t tk_get_seg_index(void) { return tk_seg_index; }
+uint8_t tk_get_seg_index(void)  { return tk_seg_index; }
+float   tk_get_initial_yaw(void) { return tk_initial_yaw; }
 
 /* ---- 对外 Task1/2 Tick 入口 (WIT 陀螺仪) ---- */
 uint8_t Task1_Tick(uint8_t key) { return task_tick(key); }

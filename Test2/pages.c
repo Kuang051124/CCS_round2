@@ -308,7 +308,7 @@ void Page_Test(void)
 
 static char b_last_cmd[48] = "--";
 
-/* 解析蓝牙指令 → 返回目标模式 */
+/* 解析蓝牙指令 → 返回目标模式 (只消费 TASK3/TASK4, 其余留给 task tick 处理) */
 static uint8_t b_parse_command(void)
 {
     if (!g_bt_rx_ready) return 0;
@@ -320,15 +320,6 @@ static uint8_t b_parse_command(void)
     g_bt_rx_ready = 0;
     g_bt_rx_len   = 0;
 
-    /* 新格式指令: [ 开头, 由 BT_ParseCommand 统一解析 */
-    if (b_last_cmd[0] == '[') {
-        int8_t ret = BT_ParseCommand(b_last_cmd, len);
-        if (ret == 1)  return B_MODE_SPEED;  /* [leftspeed, ...] */
-        if (ret == -1) return B_MODE_IDLE;   /* STOP */
-        return 0;                            /* [slider/plot-clear] 不切换模式 */
-    }
-
-    /* 原有文本指令 */
     if (strncmp(b_last_cmd, "TASK3", 5) == 0) return B_MODE_TASK3;
     if (strncmp(b_last_cmd, "TASK4", 5) == 0) return B_MODE_TASK4;
     if (strncmp(b_last_cmd, "STOP",  4) == 0) return B_MODE_IDLE;
@@ -509,16 +500,7 @@ void Page_Test2(void)
         return;
     }
     if (b_mode == B_MODE_TASK3) {
-        /* A车完成时蓝牙发送STOP → B车停车退出 */
-        if (b_last_cmd[0] == 'S' && strncmp(b_last_cmd, "STOP", 4) == 0) {
-            tk_abort();
-            b_last_cmd[0] = '-'; b_last_cmd[1] = '-'; b_last_cmd[2] = '\0';
-            b_mode = B_MODE_IDLE; b_prev_mode = 0xFF;
-            OLED_Clear();
-            OLED_ShowString(0, 1, (uint8_t *)"STOP from A", 8);
-            OLED_ShowString(0, 3, (uint8_t *)"Task3 Done", 8);
-            return;
-        }
+        /* STOP 检测 + 强制停车全部在 Task3B_Tick 内部处理 */
         if (Task3B_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; }
         return;
     }

@@ -2,10 +2,10 @@
  * @file  task3.c
  * @brief Task 3: 双车协同 — A车慢速领跑 + B车摄像头测距P控跟随
  *
- * 握手协议 (新增):
- *   1. A 按5 → 反复发 "TASK3" → 等 B 回复 "READY" → 启动
- *   2. B 收到 "TASK3" → 立即启动 → 发 "READY" × 5 次
- *   3. A 到终点 → 反复发 "STOP" (B 不回复)
+ * 蓝牙协议:
+ *   1. A 按5 → 发 "TASK3" × 5 → 启动
+ *   2. B 收到 "TASK3" → pages.c 自动启动, 不回复
+ *   3. A 到终点 → 发 "STOP" × 5 (B 不回复)
  *
  * Car A (领头): Task2 路径 (A→C→CB→B→D→DA→A), 慢速参数 t3, WIT陀螺仪
  * Car B (跟随): 5段路径 D→DA→A→C→CB→B→D→DA2→(追A等STOP)
@@ -28,16 +28,12 @@
 #include <string.h>
 
 /* ===================================================================
- * Car A — 握手 + 慢速 Task2
- *
- *   状态: IDLE → HANDSHAKE(发TASK3等READY) → RUNNING → STOPPING(发STOP)
+ * Car A — 发 TASK3×5 → 运行 → 发 STOP×5
  * =================================================================== */
 
-static uint8_t  a_bt_sent       = 0;   /* 用户已按5, 进入握手阶段     */
-static uint8_t  a_ready_rcvd    = 0;   /* 收到B的READY, 任务已启动    */
-static uint8_t  a_stop_sent     = 0;   /* 已到达终点, 正在发STOP      */
-static uint32_t a_last_send_ms  = 0;   /* 上次蓝牙发送时刻             */
-static uint8_t  a_task3_send_cnt = 0;  /* "TASK3" 发送次数 (调试用)   */
+static uint8_t  a_task3_cnt     = 0;   /* "TASK3" 已发送次数       */
+static uint8_t  a_stop_cnt      = 0;   /* "STOP"  已发送次数       */
+static uint32_t a_last_send_ms  = 0;   /* 上次蓝牙发送时刻          */
 
 void Task3A_Init(void)
 {
@@ -46,92 +42,97 @@ void Task3A_Init(void)
     tk_speed_mult = 1.0f;
     task_init(task2_path, TASK2_SEG_COUNT);
 
-    a_bt_sent       = 0;
-    a_ready_rcvd    = 0;
-    a_stop_sent     = 0;
-    a_last_send_ms  = 0;
-    a_task3_send_cnt = 0;
+    a_task3_cnt    = 0;
+    a_stop_cnt     = 0;
+    a_last_send_ms = 0;
 
     OLED_Clear();
     OLED_ShowString(0, 0, (uint8_t *)"Task3A: Car A", 8);
     OLED_ShowString(0, 1, (uint8_t *)"A-C-CB-B-D-DA-A", 8);
     OLED_ShowString(0, 2, (uint8_t *)"Slow + Lead", 8);
     OLED_ShowString(0, 3, (uint8_t *)"[5] Start [9] Exit", 8);
-    OLED_ShowString(0, 5, (uint8_t *)"Wait B READY...", 8);
 }
 
 uint8_t Task3A_Tick(uint8_t key)
 {
-    /* ---- 按9退出 (任何阶段) ---- */
+    /* ---- 按9退出 ---- */
     if (key == 9) {
-        a_bt_sent = 0; a_ready_rcvd = 0; a_stop_sent = 0;
+        a_task3_cnt = 0; a_stop_cnt = 0;
         return 1;
     }
 
-    /* ======== Phase 1: 按5 → 握手 ======== */
-    if (key == 5 && !a_bt_sent) {
-        a_bt_sent = 1;
-        a_last_send_ms = 0;  /* 立即发第一条 */
-    }
-
-    if (a_bt_sent && !a_ready_rcvd) {
-        /* 检查 B 的 READY */
-        if (g_bt_rx_ready) {
-            if (strncmp((const char *)g_bt_rx_buf, "READY", 5) == 0) {
-                a_ready_rcvd = 1;
-                task_tick(5);  /* 启动任务! */
-            }
-            g_bt_rx_ready = 0; g_bt_rx_len = 0;
-        }
-
-        /* 每 500ms 发一次 TASK3 */
-        if (!a_ready_rcvd && tick_ms - a_last_send_ms > 500) {
+    /* ======== Phase 1: 按5 → 发 TASK3 × 5 → 启动 ======== */
+    if (a_task3_cnt == 0 && a_stop_cnt == 0 && !tk_is_done()) {
+        if (key == 5) {
+            a_task3_cnt = 1;
             Bluetooth_SendString("TASK3\r\n");
             a_last_send_ms = tick_ms;
-            a_task3_send_cnt++;
         }
+        /* 还没按5 → 等按键, 不走task_tick */
+        if (a_task3_cnt == 0) return 0;
+    }
 
-        /* OLED: 握手状态 */
-        if (!a_ready_rcvd) {
+    /* 发 TASK3 剩余 4 条 (每100ms一条) */
+    if (a_task3_cnt > 0 && a_task3_cnt < 5) {
+        if (tick_ms - a_last_send_ms > 100) {
+            Bluetooth_SendString("TASK3\r\n");
+            a_task3_cnt++;
+            a_last_send_ms = tick_ms;
+
             char buf[21];
-            sprintf(buf, "TASK3 sent x%d", a_task3_send_cnt);
+            sprintf(buf, "TASK3 sent: %d/5", a_task3_cnt);
             OLED_ShowString(0, 5, (uint8_t *)buf, 8);
-            OLED_ShowString(0, 6, (uint8_t *)"Wait B READY...", 8);
-            return 0;  /* 握手完成前不走 task_tick */
         }
+        return 0;  /* 发完前不走 task_tick */
+    }
+
+    /* 发完 TASK3 → 启动任务 (只触发一次) */
+    if (a_task3_cnt == 5) {
+        a_task3_cnt = 6;  /* 标记已启动, 防止重复触发 */
+        task_tick(5);
     }
 
     /* ======== Phase 2: 运行中 ======== */
     uint8_t ret = task_tick(key);
 
-    /* ======== Phase 3: 到终点 → 反复发 STOP ======== */
-    if (tk_is_done() && !a_stop_sent) {
-        a_stop_sent    = 1;
-        a_last_send_ms = 0;  /* 立即发第一条 */
+    /* ======== Phase 3: 到终点 → 发 STOP × 5 ======== */
+    if (tk_is_done() && a_stop_cnt == 0) {
+        a_stop_cnt = 1;
+        Bluetooth_SendString("STOP\r\n");
+        a_last_send_ms = tick_ms;
+
+        char buf[21];
+        sprintf(buf, "STOP sent: 1/5");
+        OLED_ShowString(0, 5, (uint8_t *)buf, 8);
     }
-    if (a_stop_sent) {
-        if (tick_ms - a_last_send_ms > 500) {
+    if (a_stop_cnt > 0 && a_stop_cnt < 5) {
+        if (tick_ms - a_last_send_ms > 100) {
             Bluetooth_SendString("STOP\r\n");
+            a_stop_cnt++;
             a_last_send_ms = tick_ms;
+
+            char buf[21];
+            sprintf(buf, "STOP sent: %d/5", a_stop_cnt);
+            OLED_ShowString(0, 5, (uint8_t *)buf, 8);
         }
     }
 
-    /* 用户按9退出 → 重置所有标志 */
+    /* 按9退出 → 重置 */
     if (ret) {
-        a_bt_sent = 0; a_ready_rcvd = 0; a_stop_sent = 0;
+        a_task3_cnt = 0; a_stop_cnt = 0;
     }
     return ret;
 }
 
 /* ===================================================================
- * Car B — 收到 TASK3 → 启动 + 发 READY×5 → 跟随
+ * Car B — 收到 TASK3 → pages.c 自动启动 → 摄像头P控跟随
  *
- *   pages.c 收到 "TASK3" → Task3B_Init() + task_tick(5) (自动启动)
- *   Task3B_Tick 负责发 READY×5 + 摄像头P控
+ *   STOP 检测在此处完成, 停车后 OLED 持续显示原因
+ *   强制停车: yaw差∈[-90°,-45°] 且 距离<30cm (蓝牙失效兜底)
  * =================================================================== */
 
-static uint8_t  b_ready_cnt     = 0;
-static uint32_t b_last_ready_ms = 0;
+uint8_t g_stop_reason = STOP_REASON_NONE;
+static uint8_t b_stopped = 0;  /* 0=运行, 1=BT, 2=force */
 
 void Task3B_Init(void)
 {
@@ -140,8 +141,8 @@ void Task3B_Init(void)
     tk_speed_mult = T3_SPEED_INIT;  /* 初始加速追赶 A 车 */
     task_init(task3b_path, TASK3B_SEG_COUNT);
 
-    b_ready_cnt     = 0;
-    b_last_ready_ms = 0;
+    g_stop_reason = STOP_REASON_NONE;
+    b_stopped     = 0;
 
     /* 清摄像头标志位 */
     Pto_Clear_CMD_Flag();
@@ -156,35 +157,55 @@ void Task3B_Init(void)
 
 uint8_t Task3B_Tick(uint8_t key)
 {
-    static uint32_t last_tag_ms = 0;   /* 上次收到AprilTag的时刻 */
+    static uint32_t last_tag_ms   = 0;    /* 上次收到AprilTag的时刻    */
+    static float    last_dist_cm  = 0;    /* 最新距离 (cm), 停车用     */
 
-    /* 不检查 tk_is_done(): 第5段DA弧永不结束, 等A车蓝牙STOP由pages.c截获退出 */
-
-    /* ==== 启动后发 READY × 5 (间隔100ms) ==== */
-    if (b_ready_cnt < 5 && tick_ms - b_last_ready_ms > 100) {
-        Bluetooth_SendString("READY\r\n");
-        b_ready_cnt++;
-        b_last_ready_ms = tick_ms;
+    /* ==== 已停车 → OLED 持续显示原因, 等用户按 ModeB 退出 ==== */
+    if (b_stopped) {
+        OLED_ShowString(0, 0, (uint8_t *)"Task3B: STOPPED", 8);
+        if (b_stopped == STOP_REASON_BT) {
+            OLED_ShowString(0, 1, (uint8_t *)"STOP from A (BT)", 8);
+            OLED_ShowString(0, 3, (uint8_t *)"Task3 Done", 8);
+        } else {
+            OLED_ShowString(0, 1, (uint8_t *)"FORCE STOP", 8);
+            OLED_ShowString(0, 3, (uint8_t *)"Yaw+Dist trigger", 8);
+        }
+        return 0;
     }
+
+    /* ==== 蓝牙 STOP 检测 (A车完成, b_parse_command 不会消费 STOP) ==== */
+    if (g_bt_rx_ready) {
+        if (strncmp((const char *)g_bt_rx_buf, "STOP", 4) == 0) {
+            tk_abort();
+            g_stop_reason = STOP_REASON_BT;
+            b_stopped = STOP_REASON_BT;
+            g_bt_rx_ready = 0; g_bt_rx_len = 0;
+            OLED_Clear();
+            return 0;
+        }
+        g_bt_rx_ready = 0; g_bt_rx_len = 0;
+    }
+
+    /* 不检查 tk_is_done(): 第5段DA弧永不结束 */
 
     /* ==== 摄像头 AprilTag 测距 → P 控制速度 ==== */
     if (New_CMD_flag) {
         Pto_Frame_t frame;
         if (Pto_Parse_Frame(RxBuffer, New_CMD_length, &frame) == 0
             && frame.type == PTO_TYPE_APRILTAG) {
-            float dist_cm = frame.data.apriltag.distance_mm / 10.0f;
-            float error   = dist_cm - T3_DIST_TARGET;
+            last_dist_cm = frame.data.apriltag.distance_mm / 10.0f;
+            float error  = last_dist_cm - T3_DIST_TARGET;
 
             /* P 控制: 距离偏大 → 加速追赶, 距离偏小 → 减速 */
             tk_speed_mult = 1.0f + T3_DIST_KP * error;
             if (tk_speed_mult < T3_SPEED_MIN) tk_speed_mult = T3_SPEED_MIN;
             if (tk_speed_mult > T3_SPEED_MAX) tk_speed_mult = T3_SPEED_MAX;
 
-            last_tag_ms = tick_ms;  /* 记录收到时刻 */
+            last_tag_ms = tick_ms;
 
-            /* OLED 显示距离+倍率 (行 5-6, 不刷全屏以免闪烁) */
+            /* OLED 显示距离+倍率 */
             char buf[21];
-            sprintf(buf, "Dist:%5.1fcm T:30", dist_cm);
+            sprintf(buf, "Dist:%5.1fcm T:30", last_dist_cm);
             OLED_ShowString(0, 5, (uint8_t *)buf, 8);
             sprintf(buf, "SpdMul: %.2f", tk_speed_mult);
             OLED_ShowString(0, 6, (uint8_t *)buf, 8);
@@ -197,6 +218,37 @@ uint8_t Task3B_Tick(uint8_t key)
         tk_speed_mult = 1.0f;
         OLED_ShowString(0, 5, (uint8_t *)"LOST TAG! Chase..", 8);
         OLED_ShowString(0, 6, (uint8_t *)"SpdMul: 1.00", 8);
+    }
+
+    /* ==== 航向差计算 (强制停车 + 速度递减共用, 仅在DA弧段生效) ==== */
+    uint8_t seg   = tk_get_seg_index();
+    uint8_t on_da = (seg == 0 || seg == 4);  /* task3b: DA弧 = seg0, DA弧2 = seg4 */
+
+    if (on_da) {
+        float init_yaw = tk_get_initial_yaw();
+        float yaw_d = wit_data.yaw - init_yaw;
+        if (yaw_d >  180.0f) yaw_d -= 360.0f;
+        if (yaw_d < -180.0f) yaw_d += 360.0f;
+
+        /* ==== 强制停车: 仅最后一段DA弧 (seg4), 蓝牙失效兜底 ==== */
+        if (seg == 4
+            && yaw_d >= T3_FORCE_YAW_MIN && yaw_d <= T3_FORCE_YAW_MAX
+            && last_dist_cm > 0 && last_dist_cm < T3_FORCE_DIST_CM) {
+            tk_abort();
+            g_stop_reason = STOP_REASON_FORCE;
+            b_stopped = STOP_REASON_FORCE;
+            OLED_Clear();
+            return 0;
+        }
+
+        /* ==== 弧线末段减速: yaw从T3_SLOW_YAW_START→END, 倍率线性递减 ==== */
+        if (yaw_d <= T3_SLOW_YAW_START && yaw_d >= T3_SLOW_YAW_END) {
+            float progress = (yaw_d - T3_SLOW_YAW_START)
+                           / (T3_SLOW_YAW_END - T3_SLOW_YAW_START);
+            if (progress < 0.0f) progress = 0.0f;
+            if (progress > 1.0f) progress = 1.0f;
+            tk_speed_mult = tk_speed_mult + (1.0f - tk_speed_mult) * progress * 0.8f;
+        }
     }
 
     return task_tick(key);
