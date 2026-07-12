@@ -1,4 +1,5 @@
 #include "bluetooth.h"
+#include "bt_cmd_parser.h"
 #include "../Drivers/MSPM0/clock.h"
 #include <string.h>
 
@@ -130,12 +131,26 @@ void Bluetooth_RX_ISR(uint8_t byte)
     g_bt_rx_buf[g_bt_rx_len++] = byte;
 }
 
-/* 主循环中调用: 处理 ISR 标记的延迟回复 */
+/* 主循环中调用: 处理 ISR 标记的延迟回复 + 命令解析 */
 void Bluetooth_Poll(void)
 {
     if (g_bt_need_ack) {
         g_bt_need_ack = 0;
         Bluetooth_SendString("ACK\r\n");
         g_bt_state = BT_CONNECTED;
+    }
+
+    /* 解析收到的蓝牙指令帧
+     * BT_ParseCommand 返回值:
+     *    1  = 速度指令已处理 → 消费帧
+     *    0  = 参数调整等已处理 → 消费帧
+     *   -1  = TASK3/TASK4 (需转发给 task 代码) → 不消费, 留给 task_tick */
+    if (g_bt_rx_ready) {
+        int8_t ret = BT_ParseCommand((const char *)g_bt_rx_buf, g_bt_rx_len);
+        if (ret >= 0) {
+            g_bt_rx_ready = 0;
+            g_bt_rx_len   = 0;
+        }
+        /* ret == -1: 帧留给 task3.c / pages.c 处理, 不消费 */
     }
 }

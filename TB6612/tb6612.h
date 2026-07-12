@@ -38,8 +38,8 @@ typedef struct {
   float speed;                  // 目标速度
   float pos;                    // 目标位置
   Encoder_t encoder;            // 编码器
-  Pid_t pos_pid;                // 速度环pid
-  Pid_t speed_pid;              // 位置环pid
+  Pid_t pos_pid;                // 位置环pid
+  Pid_t speed_pid;              // 速度环pid
   GPIO_Regs *forward_GPIO_PORT; // 前进GPIO端口
   GPIO_Regs *reverse_GPIO_PORT; // 后退GPIO端口
 } Motor_t;

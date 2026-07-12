@@ -293,7 +293,7 @@ void Motor_Stop(Motor_t *motor) {
 // void MOTOR_TIM_INST_IRQHandler(void) {
 //   switch (DL_TimerA_getPendingInterrupt(MOTOR_TIM_INST)) {
 //   case DL_TIMER_IIDX_ZERO:
-//     SPEED_PID_Tick();  /* 在 ENCODER/encoder.c 中实现 */
+//     SPEED_PID_Tick();  /* 在 ENCODER/speed_control.c 中实现 */
 //     break;
 //   default:
 //     break;

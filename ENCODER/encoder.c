@@ -43,8 +43,8 @@ void ENCODER_SpeedSample(void)
     int32_t rightRaw = rightDelta * 100;
 
     /* EMA 低通滤波: filtered = (old * 3 + new) / 4  (α = 1/4) */
-    g_leftSpeed  = (g_leftSpeed  * 3 + leftRaw)  / 4;
-    g_rightSpeed = (g_rightSpeed * 3 + rightRaw) / 4;
+    g_leftSpeed  = (g_leftSpeed  * 1 + leftRaw*3)  / 4;
+    g_rightSpeed = (g_rightSpeed * 1 + rightRaw*3) / 4;
 
     g_lastLeftCount  = g_leftEncoderCount;
     g_lastRightCount = g_rightEncoderCount;
@@ -54,6 +54,28 @@ void ENCODER_SpeedSample(void)
  *  编码器面对面安装，同向转动时计数相反。
  *  左轮取反，右轮保持原值。返回值: 正 = 前进, 负 = 后退。
  */
+int32_t ENCODER_GetLeftCount(void)
+{
+    return -g_leftEncoderCount;
+}
+
+int32_t ENCODER_GetRightCount(void)
+{
+    return g_rightEncoderCount;
+}
+
+void ENCODER_ResetLeft(void)
+{
+    g_leftEncoderCount = 0;
+    g_lastLeftCount    = 0;  /* 同步清零, 防止下次 SpeedSample 算出负速度尖峰 */
+}
+
+void ENCODER_ResetRight(void)
+{
+    g_rightEncoderCount = 0;
+    g_lastRightCount    = 0;
+}
+
 int32_t ENCODER_GetLeftSpeed(void)
 {
     return -g_leftSpeed;

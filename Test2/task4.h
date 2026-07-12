@@ -9,7 +9,7 @@
  *   A→B段: A走A→O→B(绕O, 路程长+慢速), B走DA弧+A→B(直线, 路程短+快速) → B超A
  *   C→D段: B走C→O→D(绕O, 路程长+慢速), A走C→D+DA弧(直线, 路程短+快速) → A超B
  *
- * 延时段 (SEG_STRAIGHT_DELAY): A→O, O→B, C→O, O→D  编码器计数值判定终点 (T4_ENCODER_TARGET=1700)
+ * 延时段 (SEG_STRAIGHT_DELAY): A→O, O→B, C→O, O→D  编码器计数值判定终点 (T4_ENCODER_TARGET=2100)
  */
 
 #ifndef _TASK4_H_
@@ -22,7 +22,7 @@
  * 编码器到位参数
  * =================================================================== */
 
-#define T4_ENCODER_TARGET   2100     /* 左右轮编码器平均计数 → 直段终点 (A→O/O→B/C→O/O→D) */
+#define T4_ENCODER_TARGET   2000     /* 左右轮编码器平均计数 → 直段终点 (A→O/O→B/C→O/O→D) */
 
 /* ===================================================================
  * Task4 每段独立参数 — 替代旧的 tk_speed_mult 间接调速

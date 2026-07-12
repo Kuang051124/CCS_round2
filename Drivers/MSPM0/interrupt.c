@@ -345,8 +345,7 @@ void MOTOR_TIM_INST_INST_IRQHandler(void)
     switch (DL_TimerG_getPendingInterrupt(MOTOR_TIM_INST_INST)) {
     case DL_TIMER_IIDX_ZERO:
         ENCODER_SpeedSample();        /* 计算左右轮速度 (counts/s) */
-        /* 用当前存储的目标值调用 SPEED_SetTarget, 执行 PI 控制 */
-        SPEED_SetTarget(SPEED_GetTargetLeft(), SPEED_GetTargetRight());
+        SPEED_PID_Tick();             /* 测速→PID→输出 (内部自带防重入+活跃检查) */
         break;
     default:
         break;

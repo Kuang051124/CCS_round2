@@ -19,5 +19,6 @@ void Page_Debug_Step(void);
 void Page_Debug_Gyro(void);
 void Page_Debug_Camera(void);
 void Page_CurveDebug(void);
+void Page_PWMTest(void);
 
 #endif /* _PAGES_H_ */

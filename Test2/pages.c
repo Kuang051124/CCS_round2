@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "BLUETOOTH/bluetooth.h"
+#include "../TB6612/tb6612.h"
 #include "ENCODER/encoder.h"
 #include "ENCODER/speed_control.h"
 #include "BLUETOOTH/bt_cmd_parser.h"
@@ -40,6 +41,7 @@ void Page_Home(void)
     case 5: while (Scan_Keyboard()); page_state = 5; break;  /* Gyro  */
     case 6: while (Scan_Keyboard()); page_state = 6; break;  /* Camera */
     case 7: while (Scan_Keyboard()); page_state = 7; break;  /* Curve  */
+    case 8: while (Scan_Keyboard()); page_state = 8; break;  /* PWM   */
     }
   }
 
@@ -51,7 +53,8 @@ void Page_Home(void)
   OLED_ShowString(0, 3, (uint8_t *)"[3]Test Page     ", 8);
   OLED_ShowString(0, 4, (uint8_t *)"[4]Step Debug    ", 8);
   OLED_ShowString(0, 5, (uint8_t *)"[5]Gyro Debug    ", 8);
-  OLED_ShowString(0, 6, (uint8_t *)"[6]Camera [7]Curve", 8);
+  OLED_ShowString(0, 6, (uint8_t *)"[6]Cam [7]Curve  ", 8);
+  OLED_ShowString(0, 7, (uint8_t *)"[8]PWM   9:Home  ", 8);
 }
 
 /* ==================================================================
@@ -73,14 +76,14 @@ typedef struct {
 } T1_ParamEntry;
 
 static T1_ParamEntry t1_param_table[] = {
-    {"SpdStr",  &t1.spd_straight,   392.0f,  14.0f,  70.0f},
-    {"SpdArc",  &t1.spd_arc,        308.0f,  14.0f,  70.0f},
-    {"ArcKP",   &t1.spd_arc_kp,     70.0f,   7.0f,   28.0f},
-    {"GyroKP",  &t1.gyro_kp,        14.0f,   7.0f,   28.0f},
-    {"OfsCW",   &t1.arc_ofs_cw,     70.0f,   7.0f,   28.0f},
-    {"OfsCCW",  &t1.arc_ofs_ccw,   -70.0f,   7.0f,   28.0f},
-    {"CW_T2",   &t1.arc_ofs_cw_t2,  112.0f,  7.0f,   28.0f},
-    {"CCW_T2",  &t1.arc_ofs_ccw_t2,-112.0f,  7.0f,   28.0f},
+    {"SpdStr",  &t1.spd_straight,   1400.0f,  50.0f,  200.0f},
+    {"SpdArc",  &t1.spd_arc,        1200.0f,  50.0f,  200.0f},
+    {"ArcKP",   &t1.spd_arc_kp,     200.0f,   20.0f,  100.0f},
+    {"GyroKP",  &t1.gyro_kp,        50.0f,    10.0f,   50.0f},
+    {"OfsCW",   &t1.arc_ofs_cw,     250.0f,   25.0f,  100.0f},
+    {"OfsCCW",  &t1.arc_ofs_ccw,   -250.0f,   25.0f,  100.0f},
+    {"CW_T2",   &t1.arc_ofs_cw_t2,  1000.0f,  50.0f,  200.0f},
+    {"CCW_T2",  &t1.arc_ofs_ccw_t2,-1000.0f,  50.0f,  200.0f},
 };
 #define T1_PARAM_COUNT (sizeof(t1_param_table) / sizeof(t1_param_table[0]))
 
@@ -880,5 +883,126 @@ void Page_CurveDebug(void)
 
     /* Line 7: 状态 */
     sprintf(buf, "%s  9:Home", motor_on ? "**RUN**" : "STOP");
+    OLED_ShowString(0, 7, (uint8_t *)buf, 8);
+}
+
+/* ==================================================================
+ * Page_PWMTest — PWM→转速 校准页 (page_state = 8)
+ *
+ * 目的: 测试固定 PWM 占空比下电机的实际转速 (counts/s)
+ *       直接调用 Motor_Set_Duty() 开环驱动, 不走 PID
+ *       用于校准 PWM 与编码器速度的对应关系
+ *
+ * 显示:
+ *   Line 0: 标题
+ *   Line 1: 占空比 (0~100%)
+ *   Line 2: 左右轮实时速度 (counts/s)
+ *   Line 3: 编码器计数值
+ *   Line 4: 校准系数 → 100% 占空比对应的预期速度
+ *
+ * 按键:
+ *   1/2 = 占空比 -/+       4/5 = 快调 -/+
+ *   6   = 微调/粗调切换    7   = 启动/停止电机
+ *   8   = 紧急停止         9   = 返回 Home
+ *
+ * 步长: 微调 ±1%  粗调 ±5%  快调 ±10%
+ * ================================================================== */
+void Page_PWMTest(void)
+{
+    static int32_t pwm_pct     = 20;     /* PWM 占空比 (0~100%)         */
+    static uint8_t coarse      = 0;      /* 0=微调  1=粗调              */
+    static uint8_t motor_on    = 0;      /* 0=停止  1=电机运行          */
+    static uint8_t last_key    = 0;
+
+    uint8_t k = Scan_Keyboard();
+
+    /* ---- 9: 停电机 + 返回 Home ---- */
+    if (k == 9) {
+        Motor_Stop(&motor_bl);
+        Motor_Stop(&motor_br);
+        motor_on = 0;
+        while (Scan_Keyboard());
+        page_state = 0;
+        return;
+    }
+
+    /* ---- 8: 紧急停止 ---- */
+    if (k == 8) {
+        Motor_Stop(&motor_bl);
+        Motor_Stop(&motor_br);
+        motor_on = 0;
+    }
+
+    /* ---- 参数调节 (边沿触发) ---- */
+    if (k != 0 && k != last_key) {
+        int32_t step = coarse ? 5 : 1;   /* 微调 1%, 粗调 5% */
+
+        switch (k) {
+        case 1: pwm_pct -= step;    break;
+        case 2: pwm_pct += step;    break;
+        case 4: pwm_pct -= step*2;  break;  /* 快调: 2倍步长 */
+        case 5: pwm_pct += step*2;  break;
+        case 6: coarse = !coarse;   break;
+        case 7: /* 切换 启动/停止 */
+            if (motor_on) {
+                Motor_Stop(&motor_bl);
+                Motor_Stop(&motor_br);
+                motor_on = 0;
+            } else {
+                motor_on = 1;
+            }
+            break;
+        }
+
+        if (pwm_pct < 0)    pwm_pct = 0;
+        if (pwm_pct > 100)  pwm_pct = 100;
+    }
+    last_key = k;
+
+    /* ---- 运行中: 每帧写入固定 PWM (Motor_Set_Duty 入参 0~1) ---- */
+    if (motor_on) {
+        float duty = (float)pwm_pct / 100.0f;
+        Motor_Set_Duty(&motor_bl, duty);
+        Motor_Set_Duty(&motor_br, duty);
+    }
+
+    /* ========== OLED 显示 (8行×16列) ========== */
+    int32_t spdL = ENCODER_GetLeftSpeed();
+    int32_t spdR = ENCODER_GetRightSpeed();
+    int32_t cntL = (int32_t)(-g_leftEncoderCount);   /* 左轮取反, 正=前进 */
+    int32_t cntR = (int32_t)g_rightEncoderCount;
+    char buf[21];
+
+    /* Line 0: 标题 */
+    sprintf(buf, "PWM->Speed [%s]", coarse ? "C" : "F");
+    OLED_ShowString(0, 0, (uint8_t *)buf, 8);
+
+    /* Line 1: 占空比 + 对应的定时器原始值 */
+    sprintf(buf, "Duty: %3d%% (%d/500)", (int)pwm_pct, (int)(pwm_pct * 5));
+    OLED_ShowString(0, 1, (uint8_t *)buf, 8);
+
+    /* Line 2: 实时速度 (counts/s) */
+    sprintf(buf, "Spd L:%+5d R:%+5d", (int)spdL, (int)spdR);
+    OLED_ShowString(0, 2, (uint8_t *)buf, 8);
+
+    /* Line 3: 编码器计数值 */
+    sprintf(buf, "Cnt L:%+5d R:%+5d", (int)cntL, (int)cntR);
+    OLED_ShowString(0, 3, (uint8_t *)buf, 8);
+
+    /* Line 4: 校准系数 = 100% 占空比对应的速度估算值
+     *         公式: spdL × 100 / pwm_pct → 用于校准 SPEED_MAX */
+    if (pwm_pct > 0 && spdL > 0) {
+        sprintf(buf, "D2S:%4d ct/s@100%%", (int)(spdL * 100 / pwm_pct));
+    } else {
+        sprintf(buf, "D2S: ---          ");
+    }
+    OLED_ShowString(0, 4, (uint8_t *)buf, 8);
+
+    /* Line 5~6: 按键提示 */
+    OLED_ShowString(0, 5, (uint8_t *)"[1][2]Duty [4][5]Fast", 8);
+    OLED_ShowString(0, 6, (uint8_t *)"[6]Coarse [7]Run/Stop", 8);
+
+    /* Line 7: 状态 */
+    sprintf(buf, "[8]Stop %s  9:Home", motor_on ? "**RUN**" : "STOP");
     OLED_ShowString(0, 7, (uint8_t *)buf, 8);
 }

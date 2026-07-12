@@ -109,7 +109,7 @@ AD0 | GND | 地址 0x68
 
 WIT 信号 | MSPM0 引脚 | 说明
 ---|---|---
-TX | PA11 | 接 MSPM0 UART0_RX，115200bps，DMA 接收
+TX | PA11 | 接 MSPM0 UART0_RX，115200bps，DMA 接收//PA11也是BSL的RX，所以解锁时要将WIT拔下否则无法成功烧录。
 RX | 未接 | 当前代码只接收 WIT 数据
 VCC | 按模块规格 | 常见 3.3V/5V，确认模块说明
 GND | GND | 共地

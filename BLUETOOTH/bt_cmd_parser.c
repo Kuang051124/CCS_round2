@@ -120,7 +120,7 @@ int8_t BT_ParseCommand(const char *buf, uint8_t len)
     if (strncmp(buf, "STOP", 4) == 0) {
         SPEED_SetTarget(0, 0);
         s_speedModeActive = 0;
-        return -1;
+        return -1;  /* 不消费帧: 留给 task3.c 做 tk_abort() + 状态切换 */
     }
     if (strncmp(buf, "TASK3", 5) == 0) return -1;
     if (strncmp(buf, "TASK4", 5) == 0) return -1;

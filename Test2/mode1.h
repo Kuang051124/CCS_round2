@@ -7,7 +7,7 @@
  *
  * 直线段: 陀螺仪航向保持 (P 控制)
  * 弧线段: 巡线比例公式 + 弧线偏置
- * 顶点检测: 巡线传感器 (无编码器)
+ * 顶点检测: 巡线传感器 + 编码器 (SEG_STRAIGHT_DELAY)
  */
 
 #ifndef _MODE1_H_
@@ -24,7 +24,7 @@
 #define T1_ARC_END_FRAMES    10     /* 弧线结束判定: 连续N帧全白 + 角度变化达标           */
 #define T1_ARC_YAW_DELTA     160.0f /* 弧线结束判定: 累积航向变化 > 此值(°) 才对弧线终点   */
 #define T1_ARC_FADE_DEG      30.0f  /* 弧线偏置衰减角: Task2 大偏置→T1正常偏置 过渡角度 (°) */
-#define T1_GYRO_STEER_MAX    0.40f  /* 陀螺仪转向限幅: 差速不超过 base_speed 的 N%      */
+#define T1_GYRO_STEER_MAX    0.30f  /* 陀螺仪转向限幅: 差速不超过 base_speed 的 N%      */
 #define T1_GYRO_SAMPLES      20     /* 航向采样次数: 直线段启动时采样N次取平均              */
 #define T1_GYRO_SAMPLE_MS    10     /* 航向采样间隔: 每次采样间隔N ms                      */
 #define T1_BEEP_MS           1000   /* 途经顶点蜂鸣时长 (ms)                               */
@@ -48,7 +48,7 @@
 
 /* ---- Task2: A→C直 → CB弧 → B→D直 → DA弧 ---- */
 #define T2_HEADING_AC         (-ATAN08)             /* A→C: init - atan0.8 (右转) */
-#define T2_HEADING_BD         (-180.0f + ATAN08)    /* B→D: init + 180 - atan0.8 */
+#define T2_HEADING_BD         (-180.0f + ATAN08+3)    /* B→D: init + 180 - atan0.8 */
 
 /* ---- B车 Task3: D→DA弧→A→C直→CB弧→B→D直 (从D出发) ---- */
 #define TB_HEADING_AC         (-180.0f - ATAN08)    /* A→C: 经DA弧后, init-180-atan0.8 */
@@ -83,14 +83,14 @@ extern uint8_t tk_gyro_src;
  * =================================================================== */
 
 typedef struct {
-    float spd_straight;     /* 直线段基础速度 (PWM占空比, 默认0.28, 经DUTY_TO_SPEED_MAX转为counts/s) */
-    float spd_arc;          /* 弧线段基础速度 (PWM占空比, 默认0.22, 经DUTY_TO_SPEED_MAX转为counts/s) */
-    float spd_arc_kp;       /* 弧线段差速 P        (默认 0.05) */
-    float gyro_kp;          /* 航向 P 增益         (默认 0.02) */
-    float arc_ofs_cw;       /* T1 顺时针弧偏移     (默认 0.06) */
-    float arc_ofs_ccw;      /* T1 逆时针弧偏移     (默认 -0.06) */
-    float arc_ofs_cw_t2;    /* T2 顺时针弧偏移     (默认 0.10) */
-    float arc_ofs_ccw_t2;   /* T2 逆时针弧偏移     (默认 -0.10) */
+    float spd_straight;     /* 直线段基础速度 (counts/s, t1默认 1458≈28%占空比) */
+    float spd_arc;          /* 弧线段基础速度 (counts/s, t1默认 1146≈22%占空比) */
+    float spd_arc_kp;       /* 弧线段差速 P        (counts/s, t1默认 260) */
+    float gyro_kp;          /* 航向 P 增益         (counts/s, t1默认  52) */
+    float arc_ofs_cw;       /* T1 顺时针弧偏移     (counts/s, t1默认 260) */
+    float arc_ofs_ccw;      /* T1 逆时针弧偏移     (counts/s, t1默认-260) */
+    float arc_ofs_cw_t2;    /* T2 顺时针弧入口偏置 (counts/s, t1默认1042) */
+    float arc_ofs_ccw_t2;   /* T2 逆时针弧入口偏置 (counts/s, t1默认-1042) */
 } T1Param;
 
 extern T1Param t1;          /* Task1/2 参数 */

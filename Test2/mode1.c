@@ -9,7 +9,7 @@
  *   路径 = PathSeg 数组, 状态机逐段执行
  *   Task1/2 差异 = 不同路径数组 + 直线段航向偏转
  *
- * 后轮双电机 (motor_bl/motor_br), 无编码器, 巡线传感器顶点检测
+ * 后轮双电机 (motor_bl/motor_br), 编码器 + 巡线传感器
  */
 
 #include "mode1.h"
@@ -21,6 +21,7 @@
 #include "../Drivers/MSPM0/clock.h"
 #include "../Keyboard/keyboard.h"
 #include "../ENCODER/encoder.h"
+#include "../ENCODER/speed_control.h"
 #include "ti_msp_dl_config.h"
 #include "pages.h"
 
@@ -47,11 +48,12 @@ uint8_t tk_gyro_src = GYRO_SRC_WIT;
  * 动态参数 (Page_Calib 可调)
  * =================================================================== */
 
-T1Param t1 = { 392.0f, 308.0f, 70.0f, 14.0f, 70.0f, -70.0f, 280.0f, -280.0f };
-//                        SpdStr SpdArc ArcKP  GyroKP  OfsCW  OfsCCW OfsCW2 OfsCCW2  (counts/s)
+// T1Param t1 = { 1400.0f, 1200.0f, 100.0f, 20.0f, 175.0f, -175.0f, 600.0f, -600.0f };
+//                        SpdStr SpdArc  ArcKP  GyroKP  OfsCW  OfsCCW OfsCW2 OfsCCW2  (counts/s)
+T1Param t1 = { 700.0f, 600.0f, 80.0f, 10.0f, 80.0f, -80.0f, 300.0f, -300.0f  };
 
 /* Task3 慢速参数 (功能同 Task1, 速度偏小) */
-T1Param t3 = { 196.0f, 168.0f, 28.0f, 14.0f, 17.0f, -17.0f, 98.0f, -98.0f };
+T1Param t3 = { 500.0f, 400.0f, 80.0f, 10.0f, 80.0f, -80.0f, 300.0f, -300.0f };
 
 /* 当前使用的参数指针: Task1/2 → &t1, Task3/4 → &t3 */
 T1Param *tk_param = &t1;
@@ -519,8 +521,14 @@ static void tk_trace_control(float base_speed)
     }
 
     /* 巡线 P 叠加在偏置之上 (有黑线时叠加微调, 无黑线时退化为纯偏置) */
+    static int last_sum = 0;
     if (sum != 0) {
-        steering += sum * tk_param->spd_arc_kp* tk_speed_mult;
+        steering += sum * tk_param->spd_arc_kp * tk_speed_mult;
+        last_sum = sum;
+    } else if (last_sum != 0) {
+        /* 丢线恢复: 用上次偏差方向 ×1.0 倍力度扫回去找线 */
+        steering += (last_sum > 0 ? 1.0f : -1.0f)
+                  * tk_param->spd_arc_kp * 1.0f * tk_speed_mult;
     }
 
     float left  = base_speed + steering;
