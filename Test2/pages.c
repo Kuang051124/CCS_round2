@@ -11,8 +11,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <stddef.h>
+#include <string.h>
 #include "BLUETOOTH/bluetooth.h"
 #include "ENCODER/encoder.h"
+#include "ENCODER/speed_control.h"
+#include "BLUETOOTH/bt_cmd_parser.h"
 
 extern uint8_t oled_buffer[32];
 
@@ -158,59 +161,81 @@ void Page_Calib(void)
  * Page_Debug - 编码器调试页（page_state = 2）
  *
  * 显示内容:
- *   Line 0: 标题
- *   Line 1~2: 左/右轮编码器计数值 (正值=前进)
- *   Line 3~4: 左/右轮实时速度 (counts/s)
- *   Line 5~6: 操作提示
- *   Line 7: 9:Home  8:RST
+ *   Line 0: 标题 + 目标速度
+ *   Line 1~2: 左/右轮编码器计数 + PWM 占空比
+ *   Line 3~4: 左/右轮实时速度 vs 目标
+ *   Line 5~6: 按键操作提示
+ *   Line 7: 9:Home
  *
  * 按键:
- *   8 = 清零计数器
- *   9 = 返回 Home
+ *   1 = 目标 +50   4 = 停止
+ *   2 = 目标 -50   9 = 返回 Home
+ *   3 = 目标 +100
  * ================================================================== */
 void Page_Debug(void)
 {
     uint8_t k = Scan_Keyboard();
+    int32_t tgtL = SPEED_GetTargetLeft();
+    int32_t tgtR = SPEED_GetTargetRight();
 
-    /* 9: 返回 Home */
-    if (k == 9) { while (Scan_Keyboard()); page_state = 0; return; }
-
-    /* 8: 清零编码器计数 */
-    if (k == 8) {
-        ENCODER_ResetLeft();
-        ENCODER_ResetRight();
+    /* 按键处理 */
+    if (k == 9) {
+        SPEED_SetTarget(0, 0);
+        while (Scan_Keyboard());
+        page_state = 0;
+        return;
     }
 
-    /* 周期性速度采样 (依赖 tick_ms, 10ms 间隔自动节流) */
-    ENCODER_SpeedSample();
+    switch (k) {
+    case 1: SPEED_SetTarget(tgtL + 50, tgtR);       break;  /* 左轮加速 */
+    case 2: SPEED_SetTarget(tgtL - 50, tgtR);       break;  /* 左轮减速 */
+    case 4: SPEED_SetTarget(tgtL, tgtR + 50);       break;  /* 右轮加速 */
+    case 5: SPEED_SetTarget(tgtL, tgtR - 50);       break;  /* 右轮减速 */
+    case 3: SPEED_SetTarget(tgtL + 100, tgtR + 100); break; /* 双轮加速 */
+    case 8: SPEED_SetTarget(0, 0);                  break;  /* 停止 */
+    }
+
+    /* 定时器 ISR 每 10ms 调用, 此处兜底 (防 ISR 未配置) */
+    {
+        static uint32_t s_lastMs = 0;
+        if (tick_ms - s_lastMs >= 10) {
+            s_lastMs = tick_ms;
+            ENCODER_SpeedSample();
+        }
+    }
 
     /* ========== OLED 显示 ========== */
 
-    /* Line 0: 标题 */
-    OLED_ShowString(0, 0, (uint8_t *)"Encoder Debug", 8);
+    /* Line 0: 标题 + 目标速度 */
+    sprintf((char *)oled_buffer, "EncDbg L:%-4d R:%-4d", (int)tgtL, (int)tgtR);
+    OLED_ShowString(0, 0, oled_buffer, 8);
 
-    /* Line 1: 左轮计数值 (ENCODER_GetLeftCount 已取反, 正=前进) */
-    sprintf((char *)oled_buffer, "L_Cnt:%+8ld", (long)ENCODER_GetLeftCount());
+    /* Line 1: 左轮 计数 + 占空比 */
+    sprintf((char *)oled_buffer, "L:%+6ld D:%-4d",
+            (long)g_leftEncoderCount, (int)SPEED_GetLeftDuty());
     OLED_ShowString(0, 1, oled_buffer, 8);
 
-    /* Line 2: 右轮计数值 */
-    sprintf((char *)oled_buffer, "R_Cnt:%+8ld", (long)ENCODER_GetRightCount());
+    /* Line 2: 右轮 计数 + 占空比 */
+    sprintf((char *)oled_buffer, "R:%+6ld D:%-4d",
+            (long)g_rightEncoderCount, (int)SPEED_GetRightDuty());
     OLED_ShowString(0, 2, oled_buffer, 8);
 
-    /* Line 3: 左轮速度 (counts/s) */
-    sprintf((char *)oled_buffer, "L_Spd:%+7d/s", (int)ENCODER_GetLeftSpeed());
+    /* Line 3: 左轮速度 (当前/目标) */
+    sprintf((char *)oled_buffer, "L:%+5d /%+5d/s",
+            (int)ENCODER_GetLeftSpeed(), (int)tgtL);
     OLED_ShowString(0, 3, oled_buffer, 8);
 
-    /* Line 4: 右轮速度 (counts/s) */
-    sprintf((char *)oled_buffer, "R_Spd:%+7d/s", (int)ENCODER_GetRightSpeed());
+    /* Line 4: 右轮速度 */
+    sprintf((char *)oled_buffer, "R:%+5d /%+5d/s",
+            (int)ENCODER_GetRightSpeed(), (int)tgtR);
     OLED_ShowString(0, 4, oled_buffer, 8);
 
-    /* Line 5~6: 提示 */
-    OLED_ShowString(0, 5, (uint8_t *)"Rotate wheel to", 8);
-    OLED_ShowString(0, 6, (uint8_t *)"see count change", 8);
+    /* Line 5~6: 操作提示 */
+    OLED_ShowString(0, 5, (uint8_t *)"1/2:L+/- 4/5:R+/-", 8);
+    OLED_ShowString(0, 6, (uint8_t *)"3:+100 8:STOP 9:Home", 8);
 
-    /* Line 7: 按键提示 */
-    OLED_ShowString(0, 7, (uint8_t *)"9:Home  8:RST", 8);
+    /* Line 7 */
+    OLED_ShowString(0, 7, (uint8_t *)"9:Home", 8);
 }
 
 /* ==================================================================
@@ -274,13 +299,14 @@ void Page_Test(void)
 #define B_MODE_BTASK2 2    /* ModeB按键: 调试Task2 */
 #define B_MODE_TASK3  3
 #define B_MODE_TASK4  4
+#define B_MODE_SPEED  5    /* 蓝牙目标速度控制模式 */
 
 /* ModeB 调试按键 (B车无键盘, 独立按钮) */
 #define MODE_B_PORT   GPIOB
 #define MODE_B_PIN    DL_GPIO_PIN_21   /* PB21, 按下=LOW, 外部上拉 */
 #define MODE_B_IOMUX  (IOMUX_PINCM49)  /* PB21 → PINCM49 */
 
-static char b_last_cmd[21] = "--";
+static char b_last_cmd[48] = "--";
 
 /* 解析蓝牙指令 → 返回目标模式 */
 static uint8_t b_parse_command(void)
@@ -288,15 +314,113 @@ static uint8_t b_parse_command(void)
     if (!g_bt_rx_ready) return 0;
 
     uint8_t len = g_bt_rx_len;
-    if (len > 20) len = 20;
+    if (len > sizeof(b_last_cmd) - 1) len = sizeof(b_last_cmd) - 1;
     memcpy(b_last_cmd, (const void *)g_bt_rx_buf, len);
     b_last_cmd[len] = '\0';
     g_bt_rx_ready = 0;
     g_bt_rx_len   = 0;
 
+    /* 新格式指令: [ 开头, 由 BT_ParseCommand 统一解析 */
+    if (b_last_cmd[0] == '[') {
+        int8_t ret = BT_ParseCommand(b_last_cmd, len);
+        if (ret == 1)  return B_MODE_SPEED;  /* [leftspeed, ...] */
+        if (ret == -1) return B_MODE_IDLE;   /* STOP */
+        return 0;                            /* [slider/plot-clear] 不切换模式 */
+    }
+
+    /* 原有文本指令 */
     if (strncmp(b_last_cmd, "TASK3", 5) == 0) return B_MODE_TASK3;
     if (strncmp(b_last_cmd, "TASK4", 5) == 0) return B_MODE_TASK4;
     if (strncmp(b_last_cmd, "STOP",  4) == 0) return B_MODE_IDLE;
+
+    return 0;
+}
+
+/* ==================================================================
+ * SpeedMode_Tick — B_MODE_SPEED 每帧调用
+ *
+ *  由 TIMG0 ISR (10ms) 自动执行 PI 控制, 本函数负责:
+ *    1. 解析新收到的蓝牙指令 (slider 在线调参)
+ *    2. 每 100ms 发送 [plot,...] 绘图数据到小程序
+ *    3. OLED 实时显示: 目标速度 / 实际速度 / Kp Ki Kd / PWM 占空比
+ *    4. 检测 STOP 指令退出
+ *
+ *  返回: 1=退出, 0=保持
+ * ================================================================== */
+static uint8_t SpeedMode_Tick(void)
+{
+    static uint32_t s_lastPlotMs = 0;
+
+    /* ---- 处理新收到的蓝牙指令 ---- */
+    if (g_bt_rx_ready) {
+        uint8_t len = g_bt_rx_len;
+        if (len > sizeof(b_last_cmd) - 1) len = sizeof(b_last_cmd) - 1;
+        memcpy(b_last_cmd, (const void *)g_bt_rx_buf, len);
+        b_last_cmd[len] = '\0';
+        g_bt_rx_ready = 0;
+        g_bt_rx_len   = 0;
+
+        if (b_last_cmd[0] == '[') {
+            int8_t ret = BT_ParseCommand(b_last_cmd, len);
+            if (ret == -1) {
+                SPEED_SetTarget(0, 0);
+                return 1;
+            }
+        }
+    }
+
+    /* ---- 每 100ms 发送绘图数据 ---- */
+    if (tick_ms - s_lastPlotMs >= 100) {
+        s_lastPlotMs = tick_ms;
+        BT_SendPlot(
+            SPEED_GetTargetLeft(), SPEED_GetTargetRight(),
+            ENCODER_GetLeftSpeed(), ENCODER_GetRightSpeed()
+        );
+    }
+
+    /* ========== OLED 显示 (8行) ========== */
+    char buf[21];
+
+    /* Line 0: 在线状态 + 模式 */
+    if (g_bt_state == BT_CONNECTED) {
+        sprintf(buf, "B-Speed [Online]");
+    } else {
+        sprintf(buf, "B-Speed [Offline]");
+    }
+    OLED_ShowString(0, 0, (uint8_t *)buf, 8);
+
+    /* Line 1: 左轮 — 实际 / 目标 */
+    sprintf(buf, "L:%+5d /%+5d/s",
+            (int)ENCODER_GetLeftSpeed(), (int)SPEED_GetTargetLeft());
+    OLED_ShowString(0, 1, (uint8_t *)buf, 8);
+
+    /* Line 2: 右轮 — 实际 / 目标 */
+    sprintf(buf, "R:%+5d /%+5d/s",
+            (int)ENCODER_GetRightSpeed(), (int)SPEED_GetTargetRight());
+    OLED_ShowString(0, 2, (uint8_t *)buf, 8);
+
+    /* Line 3: PWM 占空比 */
+    sprintf(buf, "Duty L:%-4d R:%-4d",
+            (int)SPEED_GetLeftDuty(), (int)SPEED_GetRightDuty());
+    OLED_ShowString(0, 3, (uint8_t *)buf, 8);
+
+    /* Line 4: Kp + Ki */
+    sprintf(buf, "Kp:%-6.2f Ki:%.2f",
+            SPEED_GetKp(), SPEED_GetKi());
+    OLED_ShowString(0, 4, (uint8_t *)buf, 8);
+
+    /* Line 5: Kd */
+    sprintf(buf, "Kd:%-6.2f", SPEED_GetKd());
+    OLED_ShowString(0, 5, (uint8_t *)buf, 8);
+
+    /* Line 6: 编码器原始计数 */
+    sprintf(buf, "Cnt L:%+6ld R:%+6ld",
+            (long)g_leftEncoderCount, (long)g_rightEncoderCount);
+    OLED_ShowString(0, 6, (uint8_t *)buf, 8);
+
+    /* Line 7: 最近指令 (截断到 14 字符防止 buf 溢出) */
+    sprintf(buf, "CMD:%.14s", b_last_cmd);
+    OLED_ShowString(0, 7, (uint8_t *)buf, 8);
 
     return 0;
 }
@@ -328,8 +452,8 @@ void Page_Test2(void)
             btn_debounce = 2;
             /* 循环切换: IDLE → BTASK1 → BTASK2 → IDLE */
             uint8_t old_mode = b_mode;
-            if (b_mode == B_MODE_IDLE)       b_mode = B_MODE_BTASK1;
-            else if (b_mode == B_MODE_BTASK1) b_mode = B_MODE_BTASK2;
+            if (b_mode == B_MODE_IDLE)       b_mode = B_MODE_SPEED;
+            // else if (b_mode == B_MODE_BTASK1) b_mode = B_MODE_BTASK2;
             else                              b_mode = B_MODE_IDLE;
             if (old_mode != B_MODE_IDLE) {
                 tk_abort();  /* 从运行模式切出时停电机 */
@@ -370,6 +494,9 @@ void Page_Test2(void)
             Task4B_Init();
             task_tick(5);
         }
+        if (b_mode == B_MODE_SPEED) {
+            BT_SendPlotClear();        /* 清空小程序绘图区 */
+        }
     }
 
     /* ======== delegate: 任务运行中, 每帧 tick ======== */
@@ -399,8 +526,13 @@ void Page_Test2(void)
         if (Task4B_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; }
         return;
     }
+    if (b_mode == B_MODE_SPEED) {
+        if (SpeedMode_Tick()) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; }
+        return;
+    }
 
     /* ======== OLED 显示 ======== */
+    char buf[24];
     if (g_bt_state == BT_CONNECTED) {
         OLED_ShowString(0, 0, (uint8_t *)"B-Car  [Online] ", 8);
     } else {
@@ -426,7 +558,6 @@ void Page_Test2(void)
     }
 
     /* WIT yaw 实时显示 + 按键提示 */
-    char buf[21];
     sprintf(buf, "Yaw:%6.1f", wit_data.yaw);
     OLED_ShowString(0, 3, (uint8_t *)buf, 8);
 

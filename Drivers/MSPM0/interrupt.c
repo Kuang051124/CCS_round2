@@ -8,6 +8,7 @@
 #include "lsm6dsv16x.h"
 #include "../../yb_protocol/yb_protocol.h"
 #include "ENCODER/encoder.h"
+#include "ENCODER/speed_control.h"
 #include "BLUETOOTH/bluetooth.h"
 
 uint8_t enable_group1_irq = 0;
@@ -16,6 +17,9 @@ void Interrupt_Init(void)
 {
     /* Group1 统一使能: GPIOA/GPIOB 中断用于编码器及其他传感器 */
     NVIC_EnableIRQ(GPIOA_INT_IRQn);
+
+    /* MOTOR_TIM_INST (TIMG0) 10ms 定时器中断: 编码器测速 + PI 控制 */
+    NVIC_EnableIRQ(MOTOR_TIM_INST_INST_INT_IRQN);
 }
 
 void SysTick_Handler(void)
@@ -327,6 +331,22 @@ void UART_BLB_INST_IRQHandler(void)
         while (!DL_UART_isRXFIFOEmpty(UART_BLB_INST)) {
             Bluetooth_RX_ISR(DL_UART_receiveData(UART_BLB_INST));
         }
+        break;
+    default:
+        break;
+    }
+}
+#endif
+
+/* ====== 10ms 定时器: 编码器测速 + 速度闭环 ====== */
+#if defined MOTOR_TIM_INST_INST_IRQHandler
+void MOTOR_TIM_INST_INST_IRQHandler(void)
+{
+    switch (DL_TimerG_getPendingInterrupt(MOTOR_TIM_INST_INST)) {
+    case DL_TIMER_IIDX_ZERO:
+        ENCODER_SpeedSample();        /* 计算左右轮速度 (counts/s) */
+        /* 用当前存储的目标值调用 SPEED_SetTarget, 执行 PI 控制 */
+        SPEED_SetTarget(SPEED_GetTargetLeft(), SPEED_GetTargetRight());
         break;
     default:
         break;
