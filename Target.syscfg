@@ -217,6 +217,7 @@ TIMER1.timerMode          = "PERIODIC";
 TIMER1.timerPeriod        = "10 ms";
 TIMER1.timerClkPrescale   = 256;
 TIMER1.timerStartTimer    = true;
+TIMER1.interrupts         = ["ZERO"];
 TIMER1.$name              = "MOTOR_TIM_INST";
 TIMER1.peripheral.$assign = "TIMG0";
 

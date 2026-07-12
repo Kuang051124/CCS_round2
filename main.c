@@ -43,6 +43,7 @@
 #include "ti_msp_dl_config.h"
 #include "BLUETOOTH/bluetooth.h"
 #include "ENCODER/encoder.h"
+#include "ENCODER/speed_control.h"
 
 uint8_t oled_buffer[32];
 int CAR_ID=2;//1是主车，2为从车
@@ -63,6 +64,7 @@ int main(void) {
   Interrupt_Init();
   ENCODER_Init();
   Motor_Init();
+  SPEED_Init(150);       /* 初始 PWM 占空比 150/500 = 30% */
   Keyboard_Init();
   Bluetooth_Init();
 

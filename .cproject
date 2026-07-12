@@ -118,8 +118,8 @@
                         </toolChain>
                     </folderInfo>
                     <sourceEntries>
-                        <entry excluding="ZDT_X42S|Test|Pid|Slave_Control|TB6600|Drivers/BNO08X_UART_RVC|Drivers/LSM6DSV16X|Drivers/OLED_Hardware_SPI|Drivers/OLED_Software_I2C|Drivers/Ultrasonic_Capture|Trace8|Drivers/OLED_Software_SPI|Drivers/Ultrasonic_GPIO|Drivers/VL53L0X" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
                         <entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Test/Test2"/>
+                        <entry excluding="PID_zdt|Pid|ZDT_X42S|Test|Slave_Control|TB6600|Drivers/BNO08X_UART_RVC|Drivers/LSM6DSV16X|Drivers/OLED_Hardware_SPI|Drivers/OLED_Software_I2C|Drivers/Ultrasonic_Capture|Trace8|Drivers/OLED_Software_SPI|Drivers/Ultrasonic_GPIO|Drivers/VL53L0X" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
                     </sourceEntries>
                 </configuration>
             </storageModule>
