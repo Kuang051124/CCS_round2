@@ -83,8 +83,8 @@ extern uint8_t tk_gyro_src;
  * =================================================================== */
 
 typedef struct {
-    float spd_straight;     /* 直线段基础速度      (默认 0.28) */
-    float spd_arc;          /* 弧线段基础速度      (默认 0.22) */
+    float spd_straight;     /* 直线段基础速度 (PWM占空比, 默认0.28, 经DUTY_TO_SPEED_MAX转为counts/s) */
+    float spd_arc;          /* 弧线段基础速度 (PWM占空比, 默认0.22, 经DUTY_TO_SPEED_MAX转为counts/s) */
     float spd_arc_kp;       /* 弧线段差速 P        (默认 0.05) */
     float gyro_kp;          /* 航向 P 增益         (默认 0.02) */
     float arc_ofs_cw;       /* T1 顺时针弧偏移     (默认 0.06) */

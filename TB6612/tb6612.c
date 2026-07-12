@@ -159,6 +159,16 @@ void Motor_Init() {
   motor_fr.encoder.speed_count = 0;
 }
 
+/* ========== 以下为旧版编码器/速度控制系统 (已废弃) ==========
+ * 功能已被 ENCODER/encoder.c 取代:
+ *   旧: 基于 Timer 周期 + Motor_t.encoder.count_num 测速
+ *   新: 基于 GPIO 中断 + g_leftEncoderCount/g_rightEncoderCount 测速
+ * Speed_Low_Filter / Speed_Filter / Encoder_Get_Speed 均无外部调用者,
+ * 仅保留供参考, 后续可删除。
+ * ================================================================ */
+
+#if 0  /* ---- 旧版速度滤波器 ---- */
+
 void Speed_Low_Filter(float new_speed, Encoder_t *encoder) {
   /*
   在对电机测速时，需要进行均值滤波，否则由于编码器测速的特性，电机测出来的速度只能是某一个值的整数倍。
@@ -185,6 +195,7 @@ float Speed_Filter(float new_speed, Encoder_t *encoder) {
   return encoder->speed;
 }
 
+/* BUG: 硬编码了 motor_bl, 传其他电机会算出错误速度 */
 float Encoder_Get_Speed(Encoder_t *encoder, uint16_t freq) {
   // 计算 rpm，
   float speed = (motor_bl.encoder.count_num - motor_bl.encoder.last_count) * 60 *
@@ -193,6 +204,8 @@ float Encoder_Get_Speed(Encoder_t *encoder, uint16_t freq) {
   encoder->last_count = encoder->count_num;
   return encoder->speed;
 }
+
+#endif /* ---- 旧版速度系统 END ---- */
 
 void Motor_Set_Pulse(Motor_t *motor) {
   /*为了输出正的占空比*/
@@ -229,6 +242,14 @@ void Motor_Set_Duty(Motor_t *motor, float duty) {
   }
 }
 
+/* ========== 旧版速度控制 (已废弃) ==========
+ * Motor_Set_Speed: 只存目标值, 不执行 PID (PID 调用已被注释)
+ * motor_modify_speed: 旧版增量式 PID, 已由 SPEED_PID_Tick() 取代
+ * 保留供参考, 后续可删除。
+ * ========================================== */
+
+#if 0  /* ---- 旧版速度控制 ---- */
+
 void Motor_Set_Speed(Motor_t *motor, float speed) {
   /*速度环*/
   motor->speed = speed;
@@ -244,6 +265,8 @@ void motor_modify_speed(Motor_t *motor, float interval) {
   Motor_Set_Pulse(motor);
 }
 
+#endif /* ---- 旧版速度控制 END ---- */
+
 void Motor_Set_Position(Motor_t *motor) { ; }
 
 void Motor_Stop(Motor_t *motor) {
@@ -252,12 +275,25 @@ void Motor_Stop(Motor_t *motor) {
   DL_GPIO_clearPins(motor->reverse_GPIO_PORT, motor->reverse_GPIO_PIN);
 }
 
-/*100 Hz*/
+/* ========== 100Hz 电机 PID 调速定时器中断 ==========
+ * TODO Step 3: 取消注释 + 改为调用 SPEED_PID_Tick()
+ *   1. Motor_Init() 中启动定时器: DL_TimerA_startCounter(MOTOR_TIM_INST);
+ *   2. NVIC 使能:               NVIC_EnableIRQ(MOTOR_TIM_INST_INT_IRQN);
+ *   3. ISR 改为:
+ *        case DL_TIMER_IIDX_ZERO:
+ *            SPEED_PID_Tick();   // 测速 → PID → Motor_Set_Duty()
+ *            break;
+ *
+ * 旧版代码 (已由 ENCODER/encoder.c + SPEED_PID_Tick 取代):
+ *
+ *   Encoder_Get_Speed(&motor_bl.encoder, 100);
+ *   motor_modify_speed(&motor_bl, 1);
+ * ================================================================ */
+
 // void MOTOR_TIM_INST_IRQHandler(void) {
 //   switch (DL_TimerA_getPendingInterrupt(MOTOR_TIM_INST)) {
 //   case DL_TIMER_IIDX_ZERO:
-//     Encoder_Get_Speed(&motor_bl.encoder, 100);
-//     motor_modify_speed(&motor_bl, 1);
+//     SPEED_PID_Tick();  /* 在 ENCODER/encoder.c 中实现 */
 //     break;
 //   default:
 //     break;

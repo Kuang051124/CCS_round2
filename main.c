@@ -131,6 +131,9 @@ int main(void) {
     case 6:
       Page_Debug_Camera();
       break;
+    case 7:
+      Page_CurveDebug();
+      break;
     default:
       break;
     }

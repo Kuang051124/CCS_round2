@@ -38,19 +38,20 @@ uint8_t tk_gyro_src = GYRO_SRC_WIT;
  * 后轮双电机便捷宏
  * =================================================================== */
 
-#define MOTOR_LEFT(_d)   Motor_Set_Duty(&motor_bl, (_d))
-#define MOTOR_RIGHT(_d)  Motor_Set_Duty(&motor_br, (_d))
-#define MOTOR_ALL_STOP() do { Motor_Stop(&motor_bl); Motor_Stop(&motor_br); } while(0)
+/* 电机控制宏: 统一改用 PID 速度闭环
+ * 占空比 → 编码器目标速度 (counts/s), 由 10ms ISR 中的 SPEED_PID_Tick() 闭环执行
+ */
+#define MOTOR_ALL_STOP()  SPEED_Stop()
 
 /* ===================================================================
  * 动态参数 (Page_Calib 可调)
  * =================================================================== */
 
-T1Param t1 = { 0.28f, 0.22f, 0.05f, 0.01f, 0.05f, -0.05f, 0.2f, -0.2f };
-//                              SpdStr SpdArc ArcKP  GyroKP OfsCW OfsCCW OfsCW2 OfsCCW2
+T1Param t1 = { 392.0f, 308.0f, 70.0f, 14.0f, 70.0f, -70.0f, 280.0f, -280.0f };
+//                        SpdStr SpdArc ArcKP  GyroKP  OfsCW  OfsCCW OfsCW2 OfsCCW2  (counts/s)
 
 /* Task3 慢速参数 (功能同 Task1, 速度偏小) */
-T1Param t3 = { 0.14f, 0.12f, 0.02f, 0.01f, 0.012f, -0.012f, 0.07f, -0.07f };
+T1Param t3 = { 196.0f, 168.0f, 28.0f, 14.0f, 17.0f, -17.0f, 98.0f, -98.0f };
 
 /* 当前使用的参数指针: Task1/2 → &t1, Task3/4 → &t3 */
 T1Param *tk_param = &t1;
@@ -430,13 +431,13 @@ static void tk_gyro_control(float base_speed)
 
     float left  = base_speed - steering;
     float right = base_speed + steering;
-    if (left  >  0.95f) left  =  0.95f;
-    if (left  < -0.95f) left  = -0.95f;
-    if (right >  0.95f) right =  0.95f;
-    if (right < -0.95f) right = -0.95f;
+    if (left  >  SPEED_MAX) left  =  SPEED_MAX;
+    if (left  < -SPEED_MAX) left  = -SPEED_MAX;
+    if (right >  SPEED_MAX) right =  SPEED_MAX;
+    if (right < -SPEED_MAX) right = -SPEED_MAX;
 
-    MOTOR_LEFT(left);
-    MOTOR_RIGHT(right);
+    /* PID 速度闭环: 参数已为编码器目标速度 (counts/s) */
+    SPEED_SetTarget((int32_t)left, (int32_t)right);
 }
 
 /* ===================================================================
@@ -525,13 +526,13 @@ static void tk_trace_control(float base_speed)
     float left  = base_speed + steering;
     float right = base_speed - steering;
 
-    if (left  >  0.95f) left  =  0.95f;
-    if (left  < -0.95f) left  = -0.95f;
-    if (right >  0.95f) right =  0.95f;
-    if (right < -0.95f) right = -0.95f;
+    if (left  >  SPEED_MAX) left  =  SPEED_MAX;
+    if (left  < -SPEED_MAX) left  = -SPEED_MAX;
+    if (right >  SPEED_MAX) right =  SPEED_MAX;
+    if (right < -SPEED_MAX) right = -SPEED_MAX;
 
-    MOTOR_LEFT(left);
-    MOTOR_RIGHT(right);
+    /* PID 速度闭环: 参数已为编码器目标速度 (counts/s) */
+    SPEED_SetTarget((int32_t)left, (int32_t)right);
 }
 
 /* ===================================================================

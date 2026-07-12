@@ -50,12 +50,14 @@ extern Motor_t motor_fl;
 extern Motor_t motor_fr;
 
 void Motor_Init();
+void Motor_Set_Pulse(Motor_t *motor);      /* 底层: 直接写 PWM 寄存器 + 方向引脚   */
+void Motor_Set_Duty(Motor_t *motor, float duty); /* 中层: duty∈[-1,1] → Motor_Set_Pulse */
+void Motor_Stop(Motor_t *motor);           /* 停止: PWM 清零 + 方向引脚拉低          */
+
+/* ---- 以下为旧版接口 (已废弃, 由 ENCODER/encoder.c 取代) ----
 void Speed_Low_Filter(float new_speed, Encoder_t *encoder);
 float Speed_Filter(float new_speed, Encoder_t *encoder);
-// void Motor_Set_Duty(Motor_t *motor);
-void Motor_Set_Pulse(Motor_t *motor);
-void Motor_Set_Duty(Motor_t *motor, float duty);
 void Motor_Set_Speed(Motor_t *motor, float speed);
-void Motor_Stop(Motor_t *motor);
+------------------------------------------------------------- */
 
 #endif /* ti_msp_dl_config_h */
