@@ -14,7 +14,7 @@
  */
 
 /* ---- PID 参数 (可通过 SPEED_SetKp/Ki/Kd 在线调整) ---- */
-static float g_kp = 0.05f;
+static float g_kp = 0.4f;
 static float g_ki = 0.4f;
 static float g_kd = 0.0005f;
 
@@ -99,6 +99,10 @@ void SPEED_SetTarget(int32_t left_speed, int32_t right_speed)
  *    Δu = Kp*[e(k)-e(k-1)] + Ki*e(k)*dt + (Kd/dt)*[e(k)-2e(k-1)+e(k-2)]
  *    u(k) = u(k-1) + Δu
  *
+ *  速度前馈:
+ *    外环目标大幅跳变 (>100 counts/s) 时, 先按线性模型预估占空比直接加载,
+ *    PID 从零误差开始微调。避免积分项从 0 慢慢爬坡, 消除起步/变速滞后。
+ *
  *  防重入: 距上次执行 < 8ms 则跳过 (防止 ISR + 主循环双重触发)
  * =================================================================== */
 void SPEED_PID_Tick(void)
@@ -111,6 +115,47 @@ void SPEED_PID_Tick(void)
 
     int32_t curLeft  = ENCODER_GetLeftSpeed();
     int32_t curRight = ENCODER_GetRightSpeed();
+
+    /* ================================================================
+     * 速度前馈: 目标大幅跳变时, 在当前占空比基础上加 P×jump
+     *
+     *   线性关系: 1 count/s ≈ 480/5000 = 0.096 占空比
+     *   增量修正: g_output += FF_KP × (新目标 - 旧目标)
+     *
+     *   优点:
+     *     - 不重置 PID 历史, 增量式 delta 自然衔接
+     *     - 自适应当前工作点 (电池电压/负载已体现在 g_output 基值中)
+     *
+     *   触发条件: 首次激活 / 目标跳变 >200 / 停车后重启 (输出=0但目标≠0)
+     * ================================================================ */
+    // {
+    //     static int32_t prev_target_l = 0, prev_target_r = 0;
+    //     static uint8_t  ff_inited    = 0;
+
+    //     #define FF_KP  0.5f   /* duty/count: 线性模型 480/5000 */
+
+    //     int32_t jump_l = g_targetLeft  - prev_target_l;
+    //     int32_t jump_r = g_targetRight - prev_target_r;
+
+    //     if (!ff_inited
+    //         || abs(jump_l) > 5000
+    //         || (g_outputL == 0 && g_targetLeft != 0)) {
+    //         g_outputL += (int32_t)(FF_KP * (float)jump_l);
+    //         if (g_outputL > MAX_DUTY) g_outputL = MAX_DUTY;
+    //         if (g_outputL < 0)        g_outputL = 0;
+    //     }
+    //     if (!ff_inited
+    //         || abs(jump_r) > 5000
+    //         || (g_outputR == 0 && g_targetRight != 0)) {
+    //         g_outputR += (int32_t)(FF_KP * (float)jump_r);
+    //         if (g_outputR > MAX_DUTY) g_outputR = MAX_DUTY;
+    //         if (g_outputR < 0)        g_outputR = 0;
+    //     }
+
+    //     prev_target_l = g_targetLeft;
+    //     prev_target_r = g_targetRight;
+    //     ff_inited = 1;
+    // }
 
     /* ======== 左轮 增量式 PID ======== */
     {

@@ -13,6 +13,10 @@
 
 uint8_t enable_group1_irq = 0;
 
+/* 外环同步标志: TIMG0 10ms ISR 每 2 次 (20ms) 置 1,
+ * pages.c 主循环消费后清零。实现内环 100Hz / 外环 50Hz 严格 2:1 同步。 */
+volatile uint8_t g_outer_loop_ready = 0;
+
 void Interrupt_Init(void)
 {
     /* Group1 统一使能: GPIOA/GPIOB 中断用于编码器及其他传感器 */
@@ -346,6 +350,15 @@ void MOTOR_TIM_INST_INST_IRQHandler(void)
     case DL_TIMER_IIDX_ZERO:
         ENCODER_SpeedSample();        /* 计算左右轮速度 (counts/s) */
         SPEED_PID_Tick();             /* 测速→PID→输出 (内部自带防重入+活跃检查) */
+
+        /* 外环 50Hz 同步: 每 2 次 10ms 中断置位一次 */
+        {
+            static uint8_t tick_div = 0;
+            if (++tick_div >= 1) {
+                tick_div = 0;
+                g_outer_loop_ready = 1;
+            }
+        }
         break;
     default:
         break;

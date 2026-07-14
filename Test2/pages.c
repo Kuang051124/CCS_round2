@@ -17,6 +17,7 @@
 #include "ENCODER/encoder.h"
 #include "ENCODER/speed_control.h"
 #include "BLUETOOTH/bt_cmd_parser.h"
+#include "../Drivers/MSPM0/interrupt.h"   /* g_outer_loop_ready — 外环50Hz同步 */
 
 extern uint8_t oled_buffer[32];
 
@@ -253,20 +254,46 @@ void Page_Test(void)
 
     uint8_t k = Scan_Keyboard();
 
-    /* 子任务 delegate: test_mode > 0 时交给对应模块处理 */
-    /* 必须放在最前面, 否则 Page_Test 自身的 if(k==9) 会截获按键 */
+    /* 子任务 delegate: test_mode > 0 时交给对应模块处理        */
+    /* 必须放在最前面, 否则 Page_Test 自身的 if(k==9) 会截获按键  */
+    /* 外环由 g_outer_loop_ready (TIMG0 20ms) 门控, 内环 2:1 同步 */
+
     /* Task1: [1]WIT  [5]Slow  [7]MPU */
-    if (test_mode == 1) { if (Task1_Tick(k))      { test_mode = 0; prev_mode = 0xFF; } return; }
-    if (test_mode == 5) { if (Task1_Slow_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } return; }
-    if (test_mode == 7) { if (Task1_MPU_Tick(k))  { test_mode = 0; prev_mode = 0xFF; } return; }
+    if (test_mode == 1) {
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task1_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } } return;
+    }
+    if (test_mode == 5) {
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task1_Slow_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } } return;
+    }
+    if (test_mode == 7) {
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task1_MPU_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } } return;
+    }
     /* Task2: [2]WIT  [6]Slow  [8]MPU */
-    if (test_mode == 2) { if (Task2_Tick(k))      { test_mode = 0; prev_mode = 0xFF; } return; }
-    if (test_mode == 6) { if (Task2_Slow_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } return; }
-    if (test_mode == 8) { if (Task2_MPU_Tick(k))  { test_mode = 0; prev_mode = 0xFF; } return; }
+    if (test_mode == 2) {
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task2_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } } return;
+    }
+    if (test_mode == 6) {
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task2_Slow_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } } return;
+    }
+    if (test_mode == 8) {
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task2_MPU_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } } return;
+    }
     /* Task3: [3]Follow */
-    if (test_mode == 3) { if (Task3A_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } return; }
+    if (test_mode == 3) {
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task3A_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } } return;
+    }
     /* Task4: [4]Overtake */
-    if (test_mode == 4) { if (Task4A_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } return; }
+    if (test_mode == 4) {
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task4A_Tick(k)) { test_mode = 0; prev_mode = 0xFF; } } return;
+    }
 
     /* ---- 菜单模式 ---- */
     if (k == 9) { while (Scan_Keyboard()); page_state = 0; return; }
@@ -494,26 +521,31 @@ void Page_Test2(void)
         }
     }
 
-    /* ======== delegate: 任务运行中, 每帧 tick ======== */
+    /* ======== delegate: 任务运行中, 外环由 g_outer_loop_ready 门控 (50Hz) ======== */
     if (b_mode == B_MODE_BTASK1) {
-        if (Task1_MPU_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; }
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task1_MPU_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; } }
         return;
     }
     if (b_mode == B_MODE_BTASK2) {
-        if (Task2_MPU_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; }
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task2_MPU_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; } }
         return;
     }
     if (b_mode == B_MODE_TASK3) {
         /* STOP 检测 + 强制停车全部在 Task3B_Tick 内部处理 */
-        if (Task3B_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; }
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task3B_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; } }
         return;
     }
     if (b_mode == B_MODE_TASK4) {
-        if (Task4B_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; }
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (Task4B_Tick(0)) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; } }
         return;
     }
     if (b_mode == B_MODE_SPEED) {
-        if (SpeedMode_Tick()) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; }
+        if (g_outer_loop_ready) { g_outer_loop_ready = 0;
+            if (SpeedMode_Tick()) { b_mode = B_MODE_IDLE; b_prev_mode = 0xFF; } }
         return;
     }
 

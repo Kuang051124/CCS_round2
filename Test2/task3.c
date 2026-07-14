@@ -37,10 +37,10 @@ static uint32_t a_last_send_ms  = 0;   /* 上次蓝牙发送时刻          */
 
 void Task3A_Init(void)
 {
-    tk_param      = &t3;
+    tk_param      = &t3a;  /* Task3A 专用参数, 独立于 t3 */
     tk_gyro_src   = GYRO_SRC_WIT;
     tk_speed_mult = 1.0f;
-    task_init(task2_path, TASK2_SEG_COUNT);
+    task_init(task3a_path, TASK3A_SEG_COUNT);  /* Task3A 专用路径, 航向独立可调 */
 
     a_task3_cnt    = 0;
     a_stop_cnt     = 0;
@@ -132,17 +132,21 @@ uint8_t Task3A_Tick(uint8_t key)
  * =================================================================== */
 
 uint8_t g_stop_reason = STOP_REASON_NONE;
-static uint8_t b_stopped = 0;  /* 0=运行, 1=BT, 2=force */
+static uint8_t b_stopped    = 0;  /* 0=运行, 1=BT, 2=force */
+static uint8_t s_cam_seen   = 0;  /* 0=未识别, 1=已首次识别 (用于快速→慢速切换) */
 
 void Task3B_Init(void)
 {
-    tk_param      = &t3;
+    /* 用 Task3B 专用参数: 从快速追车参数开始, 减速段现场插值 */
+    t3b_work = t3b_fast;         /* 结构体整体赋值, 初始 = 快 */
+    tk_param      = &t3b_work;
     tk_gyro_src   = GYRO_SRC_WIT;
-    tk_speed_mult = T3_SPEED_INIT;  /* 初始加速追赶 A 车 */
+    tk_speed_mult = T3_SPEED_INIT;  /* = 1.0, 追车速度由 t3b_fast 基速决定 */
     task_init(task3b_path, TASK3B_SEG_COUNT);
 
     g_stop_reason = STOP_REASON_NONE;
     b_stopped     = 0;
+    s_cam_seen    = 0;
 
     /* 清摄像头标志位 */
     Pto_Clear_CMD_Flag();
@@ -152,7 +156,7 @@ void Task3B_Init(void)
     OLED_ShowString(0, 1, (uint8_t *)"D-DA-A-C-CB-B-D-DA", 8);
     OLED_ShowString(0, 2, (uint8_t *)"Cam P-ctrl 30cm", 8);
     OLED_ShowString(0, 3, (uint8_t *)"BT Start [STOP]End", 8);
-    OLED_ShowString(0, 5, (uint8_t *)"Init chase x1.50", 8);
+    OLED_ShowString(0, 5, (uint8_t *)"Fast chase 1.0x", 8);
 }
 
 uint8_t Task3B_Tick(uint8_t key)
@@ -196,6 +200,13 @@ uint8_t Task3B_Tick(uint8_t key)
             last_dist_cm = frame.data.apriltag.distance_mm / 10.0f;
             float error  = last_dist_cm - T3_DIST_TARGET;
 
+            /* 首次识别到标签: 立刻切慢速参数, 此后摄像头 P 控基于慢速工作 */
+            if (!s_cam_seen) {
+                s_cam_seen = 1;
+                t3b_work = t3b_slow;
+                OLED_ShowString(0, 4, (uint8_t *)"CAM LOCK->SLOW", 8);
+            }
+
             /* P 控制: 距离偏大 → 加速追赶, 距离偏小 → 减速 */
             tk_speed_mult = 1.0f + T3_DIST_KP * error;
             if (tk_speed_mult < T3_SPEED_MIN) tk_speed_mult = T3_SPEED_MIN;
@@ -230,6 +241,13 @@ uint8_t Task3B_Tick(uint8_t key)
         if (yaw_d >  180.0f) yaw_d -= 360.0f;
         if (yaw_d < -180.0f) yaw_d += 360.0f;
 
+        /* DEBUG: 实时显示 yaw_d, 确认是否进入减速窗口 [-180, -120] */
+        {
+            char buf[21];
+            sprintf(buf, "yaw_d:%+6.0f s%d", yaw_d, seg);
+            OLED_ShowString(0, 7, (uint8_t *)buf, 8);
+        }
+
         /* ==== 强制停车: 仅最后一段DA弧 (seg4), 蓝牙失效兜底 ==== */
         if (seg == 4
             && yaw_d >= T3_FORCE_YAW_MIN && yaw_d <= T3_FORCE_YAW_MAX
@@ -241,13 +259,21 @@ uint8_t Task3B_Tick(uint8_t key)
             return 0;
         }
 
-        /* ==== 弧线末段减速: yaw从T3_SLOW_YAW_START→END, 倍率线性递减 ==== */
-        if (yaw_d <= T3_SLOW_YAW_START && yaw_d >= T3_SLOW_YAW_END) {
+        /* ==== 弧线末段减速: 所有 8 个参数从 t3b_fast 线性插值到 t3b_slow ==== */
+        /* 仅最后一段 DA 弧 (seg==4), 与摄像头 P 控 (tk_speed_mult) 完全解耦
+         * 插值幂等: 每帧基于 yaw_d 从头计算, 无状态累积, 无漂移 */
+        if (seg == 0
+            && yaw_d <= T3_SLOW_YAW_START && yaw_d >= T3_SLOW_YAW_END) {
             float progress = (yaw_d - T3_SLOW_YAW_START)
                            / (T3_SLOW_YAW_END - T3_SLOW_YAW_START);
             if (progress < 0.0f) progress = 0.0f;
             if (progress > 1.0f) progress = 1.0f;
-            tk_speed_mult = tk_speed_mult + (1.0f - tk_speed_mult) * progress * 0.8f;
+            t3b_interpolate(&t3b_work, &t3b_fast, &t3b_slow, progress);
+
+            /* DEBUG: 确认减速生效 */
+            char buf[21];
+            sprintf(buf, "SLOW p=%.2f a=%d", progress, (int)tk_param->spd_arc);
+            OLED_ShowString(0, 6, (uint8_t *)buf, 8);
         }
     }
 

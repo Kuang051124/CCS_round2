@@ -43,8 +43,8 @@ void ENCODER_SpeedSample(void)
     int32_t rightRaw = rightDelta * 100;
 
     /* EMA 低通滤波: filtered = (old * 3 + new) / 4  (α = 1/4) */
-    g_leftSpeed  = (g_leftSpeed  * 1 + leftRaw*3)  / 4;
-    g_rightSpeed = (g_rightSpeed * 1 + rightRaw*3) / 4;
+    g_leftSpeed  = (g_leftSpeed  * 3 + leftRaw*1)  / 4;
+    g_rightSpeed = (g_rightSpeed * 3 + rightRaw*1) / 4;
 
     g_lastLeftCount  = g_leftEncoderCount;
     g_lastRightCount = g_rightEncoderCount;

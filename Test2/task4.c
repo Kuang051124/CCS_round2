@@ -51,18 +51,18 @@
  * =================================================================== */
 
 /* A车 — 5段 */
-T1Param t4_AO  = { 521.0f, 521.0f, 104.0f, 26.0f,  62.0f, -62.0f,  365.0f, -365.0f }; /* A→O 慢速DELAY */
-T1Param t4_OB  = { 521.0f, 521.0f, 104.0f, 26.0f,  62.0f, -62.0f,  365.0f, -365.0f }; /* O→B 慢速DELAY */
-T1Param t4_ABC = { 700.0f, 600.0f, 100.0f, 10.0f, 60.0f, -60.0f, 300.0f, -300.0f }; /* BC弧 正常巡线 */
-T1Param t4_ACD = { 1400.0f, 1200.0f, 100.0f, 10.0f, 175.0f, -175.0f, 600.0f, -600.0f }; /* C→D 快速直   */
-T1Param t4_ADA = { 1400.0f, 1200.0f, 100.0f, 10.0f, 175.0f, -175.0f, 600.0f, -600.0f }; /* DA弧 快速回A  */
+T1Param t4_AO  = { 300.0f, 600.0f, 30.0f, 20.0f, 100.0f, -100.0f, 400.0f, -400.0f }; /* A→O 慢速DELAY */
+T1Param t4_OB  = { 300.0f, 600.0f, 30.0f, 20.0f, 100.0f, -100.0f, 400.0f, -400.0f }; /* O→B 慢速DELAY */
+T1Param t4_ABC = { 600.0f, 600.0f, 30.0f, 20.0f, 100.0f, -100.0f, 200.0f, -200.0f }; /* BC弧 正常巡线 */
+T1Param t4_ACD = { 1000.0f, 800.0f, 40.0f, 20.0f, 150.0f, -150.0f, 750.0f, -750.0f }; /* C→D 快速直   */
+T1Param t4_ADA = { 1000.0f, 800.0f, 40.0f, 20.0f, 150.0f, -150.0f, 750.0f, -750.0f }; /* DA弧 快速回A  */
 
 /* B车 — 5段 */
-T1Param t4_BDA = { 1400.0f, 1200.0f, 100.0f, 10.0f, 175.0f, -175.0f, 600.0f, -600.0f }; /* DA弧 快速追A  */
-T1Param t4_BAB = { 1400.0f, 1200.0f, 100.0f, 10.0f, 175.0f, -175.0f, 600.0f, -600.0f }; /* A→B 快速超A  */
-T1Param t4_BBC = { 700.0f, 600.0f, 100.0f, 10.0f, 60.0f, -60.0f, 300.0f, -300.0f }; /* BC弧 正常巡线 */
-T1Param t4_BCO = { 521.0f, 521.0f, 104.0f, 26.0f,  62.0f, -62.0f,  365.0f, -365.0f }; /* C→O 慢速DELAY */
-T1Param t4_BOD = { 521.0f, 521.0f, 104.0f, 26.0f,  62.0f, -62.0f,  365.0f, -365.0f }; /* O→D 慢速DELAY */
+T1Param t4_BDA = { 1000.0f, 800.0f, 40.0f, 20.0f, 150.0f, -150.0f, 800.0f, -800.0f }; /* DA弧 快速追A  */
+T1Param t4_BAB = { 1000.0f, 800.0f, 40.0f, 20.0f, 150.0f, -150.0f, 750.0f, -750.0f }; /* A→B 快速超A  */
+T1Param t4_BBC = { 600.0f, 600.0f, 30.0f, 20.0f, 100.0f, -100.0f, 400.0f, -400.0f }; /* BC弧 正常巡线 */
+T1Param t4_BCO = { 300.0f, 600.0f, 30.0f, 20.0f, 100.0f, -100.0f, 400.0f, -400.0f }; /* C→O 慢速DELAY */
+T1Param t4_BOD = { 200.0f, 600.0f, 30.0f, 20.0f, 100.0f, -100.0f, 400.0f, -400.0f }; /* O→D 慢速DELAY */
 
 /* ===================================================================
  * Car A — A→O→B→BC→C→D→DA→A
@@ -128,9 +128,12 @@ uint8_t Task4A_Tick(uint8_t key)
 
         sprintf(buf, "L:%+5ld R:%+5ld", (long)l, (long)r);
         OLED_ShowString(0, 3, (uint8_t *)buf, 8);
-        sprintf(buf, "Avg:%5ld T:%d", (long)avg, T4_ENCODER_TARGET);
+        {
+            int32_t t = (seg == 0) ? T4_ENC_AO : 0;
+            sprintf(buf, "Avg:%5ld T:%d", (long)avg, t);
+        }
         OLED_ShowString(0, 4, (uint8_t *)buf, 8);
-        sprintf(buf, "Seg:%d Str:%.2f Arc:%.2f", seg, tk_param->spd_straight, tk_param->spd_arc);
+        sprintf(buf, "S%d S:%.0f A:%.0f", seg, tk_param->spd_straight, tk_param->spd_arc);
         OLED_ShowString(0, 6, (uint8_t *)buf, 8);
     }
 
@@ -186,7 +189,9 @@ uint8_t Task4B_Tick(uint8_t key)
     } else if (seg == 3) {
         tk_param = &t4_BCO;      /* C→O 慢速DELAY */
     } else if (seg == 4) {
-        tk_param = &t4_BOD;      /* O→D 慢速DELAY */
+        tk_param = &t4_BOD;      /* O→D 直行循迹到D */
+    } else if (seg == 5) {
+        tk_param = &t4_BOD;      /* +300编码器停车 */
     }
 
     /* ==== OLED 状态 ==== */
@@ -198,9 +203,14 @@ uint8_t Task4B_Tick(uint8_t key)
 
         sprintf(buf, "L:%+5ld R:%+5ld", (long)l, (long)r);
         OLED_ShowString(0, 3, (uint8_t *)buf, 8);
-        sprintf(buf, "Avg:%5ld T:%d", (long)avg, T4_ENCODER_TARGET);
+        {
+            int32_t t = 0;
+            if (seg == 3)      t = T4_ENC_CO;
+            else if (seg == 5) t = T4_ENC_DSTOP;
+            sprintf(buf, "Avg:%5ld T:%d", (long)avg, t);
+        }
         OLED_ShowString(0, 4, (uint8_t *)buf, 8);
-        sprintf(buf, "Seg:%d Str:%.2f Arc:%.2f", seg, tk_param->spd_straight, tk_param->spd_arc);
+        sprintf(buf, "S%d S:%.0f A:%.0f", seg, tk_param->spd_straight, tk_param->spd_arc);
         OLED_ShowString(0, 6, (uint8_t *)buf, 8);
     }
 

@@ -14,9 +14,9 @@
 
 #define T3_DIST_TARGET      30.0f   /* 目标距离 (cm)          */
 #define T3_DIST_KP          0.05f  /* P 增益 (倍率/cm误差)   */
-#define T3_SPEED_INIT       1.60f   /* 初始追赶倍率 (>1)      */
+#define T3_SPEED_INIT       1.00f   /* 初始倍率 = 1.0, 追车速度由 t3b_fast 基速决定 */
 #define T3_SPEED_MIN        0.50f   /* 最小速度倍率           */
-#define T3_SPEED_MAX        1.60f   /* 最大速度倍率           */
+#define T3_SPEED_MAX        2.00f   /* 最大速度倍率           */
 
 /* ===================================================================
  * 停车原因 (供 pages.c 显示)
@@ -38,11 +38,13 @@ extern uint8_t g_stop_reason;   /* 停车原因, tasks/pages 共享   */
 
 /* ===================================================================
  * 弧线末段减速参数 (防脱轨)
+ *
+ * yaw 从 T3_SLOW_YAW_START→T3_SLOW_YAW_END 期间,
+ * t3b_work 所有 8 个字段从 t3b_fast 线性插值到 t3b_slow (与 tk_speed_mult 解耦)
  * =================================================================== */
 
-#define T3_SLOW_YAW_START   -160.0f /* 减速起点: 航向差, 全速          */
-#define T3_SLOW_YAW_END     -180.0f /* 减速终点: 航向差, 减至 1.0 倍    */
-/* yaw从-150°→-180°, tk_speed_mult 线性递减到 1.0 */
+#define T3_SLOW_YAW_START   -120.0f /* 减速起点: 快参数                     */
+#define T3_SLOW_YAW_END     -180.0f /* 减速终点: 慢参数 (与A车同步)           */
 
 /* ===================================================================
  * API

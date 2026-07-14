@@ -44,25 +44,40 @@
 
 /* ---- Task1: A→B直 → BC弧 → C→D直 → DA弧 ---- */
 #define T1_HEADING_AB         0.0f                  /* A→B: 采样当前航向 */
-#define T1_HEADING_CD         -178.0f               /* C→D: init+180° (实际-178微调) */
+#define T1_HEADING_CD         -175.0f               /* C→D: init+180° (实际-178微调) */
 
 /* ---- Task2: A→C直 → CB弧 → B→D直 → DA弧 ---- */
 #define T2_HEADING_AC         (-ATAN08)             /* A→C: init - atan0.8 (右转) */
-#define T2_HEADING_BD         (-180.0f + ATAN08+3)    /* B→D: init + 180 - atan0.8 */
+#define T2_HEADING_BD         (-180.0f + ATAN08)    /* B→D: init + 180 - atan0.8 */
+
+/* ---- A车 Task3: A→C直 → CB弧 → B→D直 → DA弧 (从A出发, 慢速领跑) ---- */
+#define T3A_HEADING_AC        (-ATAN08+3)             /* A→C: 同 T2, 可独立微调 */
+#define T3A_HEADING_BD        (-180.0f + ATAN08+3)    /* B→D: 同 T2, 可独立微调 */
 
 /* ---- B车 Task3: D→DA弧→A→C直→CB弧→B→D直 (从D出发) ---- */
-#define TB_HEADING_AC         (-180.0f - ATAN08)    /* A→C: 经DA弧后, init-180-atan0.8 */
-#define TB_HEADING_BD         (ATAN08)              /* B→D: 经CB弧后, init+atan0.8     */
+#define TB_HEADING_AC         (-180.0f - ATAN08-3)    /* A→C: 经DA弧后, init-180-atan0.8 */
+#define TB_HEADING_BD         (ATAN08+3)              /* B→D: 经CB弧后, init+atan0.8     */
 
 /* ---- B车 Task3 / Task4 通用 ---- */
-#define TB_HEADING_AB         -180.0f                  /* A→B: 采样当前航向 */
+#define TB_HEADING_AB         -180.0f                /* A→B: 采样当前航向 */
 
 /* ---- Task4 新路径 (过中心O) ---- */
-/* A车: A→O = T2_HEADING_AC, O→B = T2_HEADING_BD+180° */
+/*
+ * A车: A→O→B→(BC弧)→C→D→(DA弧)→A
+ *   前两段用 DELAY 段绕行 O 点, 对方在此超车
+ *   A→O: -ATAN08, O→B: +ATAN08, C→D: -180°±微调, DA弧=CW return
+ */
 #define TA_HEADING_AO         T2_HEADING_AC             /* A→O: -ATAN08                 */
 #define TA_HEADING_OB         (T2_HEADING_BD + 180.0f)  /* O→B: +ATAN08                 */
-/* B车: C→O = TB_HEADING_AC+180°, O→D = TB_HEADING_BD */
+#define TA_HEADING_CD         T1_HEADING_CD             /* C→D: init+180° 微调           */
+
+/*
+ * B车: D→(DA弧)→A→B→(BC弧)→C→O→D
+ *   后两段绕 O 点让 A 车超车
+ *   A→B: init+180°, C→O: -ATAN08, O→D: +ATAN08
+ */
 #define TB_HEADING_CO         (TB_HEADING_AC + 180.0f)  /* C→O: -ATAN08                 */
+#define TB_HEADING_OD         TB_HEADING_BD             /* O→D: +ATAN08 ≈ B→D 同方向    */
 
 /* ===================================================================
  * 路径段类型
@@ -94,7 +109,11 @@ typedef struct {
 } T1Param;
 
 extern T1Param t1;          /* Task1/2 参数 */
-extern T1Param t3;          /* Task3 慢速参数 */
+extern T1Param t3;          /* Task3 基准慢速参数     */
+extern T1Param t3a;         /* Task3A 领头车专用参数   */
+extern T1Param t3b_fast;    /* Task3B 快速追车参数    */
+extern T1Param t3b_slow;    /* Task3B 减速目标参数     */
+extern T1Param t3b_work;    /* Task3B 当前工作参数     */
 extern T1Param *tk_param;   /* 当前参数指针 */
 
 /* 全局速度倍率: Car B 距离 P 控制用, 默认 1.0 */
@@ -126,6 +145,10 @@ extern const PathSeg task1_path[];
 extern const PathSeg task2_path[];
 #define TASK2_SEG_COUNT 4
 
+/* A车 Task3 路径: A→C(直)→CB弧(CCW)→B→D(直)→DA弧(CW)→A (同Task2路径, 独立参数) */
+extern const PathSeg task3a_path[];
+#define TASK3A_SEG_COUNT 4
+
 /* B车 Task3 路径: D→DA弧(CW)→A→C(直)→CB弧(CCW)→B→D(直)→DA弧(CW)→(追A,等STOP) */
 extern const PathSeg task3b_path[];
 #define TASK3B_SEG_COUNT 5
@@ -135,7 +158,7 @@ extern const PathSeg task4a_path[];
 #define TASK4A_SEG_COUNT 5
 
 extern const PathSeg task4b_path[];
-#define TASK4B_SEG_COUNT 5
+#define TASK4B_SEG_COUNT 6   /* seg4循迹到D + seg5编码器多走300停车 */
 
 /* ===================================================================
  * 共享内部 API (Task3 复用)
@@ -153,6 +176,9 @@ float   tk_get_initial_yaw(void);   /* 获取任务启动时的初始航向  */
 
 void TKParam_Load(void);   /* 上电时调用, 从 Flash 恢复参数 */
 void TKParam_Save(void);   /* 调参后调用, 写入 Flash 保存   */
+
+/* Task3B 减速段: 8 字段线性插值, progress [0,1], 0=快 → 1=慢 */
+void t3b_interpolate(T1Param *out, const T1Param *src, const T1Param *dst, float p);
 
 /* ===================================================================
  * API

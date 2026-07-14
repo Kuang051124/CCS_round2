@@ -46,7 +46,7 @@
 #include "ENCODER/speed_control.h"
 
 uint8_t oled_buffer[32];
-int CAR_ID=1;//1是主车，2为从车
+int CAR_ID=2;//1是主车，2为从车
 /* ZDT_X42S 步进电机句柄 (全局, 供各页面调用) */
 // ZDT_HandleTypeDef motor1, motor2;
 

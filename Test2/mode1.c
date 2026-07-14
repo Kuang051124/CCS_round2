@@ -48,12 +48,35 @@ uint8_t tk_gyro_src = GYRO_SRC_WIT;
  * 动态参数 (Page_Calib 可调)
  * =================================================================== */
 
-// T1Param t1 = { 1400.0f, 1200.0f, 100.0f, 20.0f, 175.0f, -175.0f, 600.0f, -600.0f };
+// T1Param t1 = { 1400.0f, 1200.0f, 60.0f, 20.0f, 175.0f, -175.0f, 800.0f, -800.0f };太快了不考虑
 //                        SpdStr SpdArc  ArcKP  GyroKP  OfsCW  OfsCCW OfsCW2 OfsCCW2  (counts/s)
-T1Param t1 = { 700.0f, 600.0f, 80.0f, 10.0f, 80.0f, -80.0f, 300.0f, -300.0f  };
+T1Param t1  = { 1000.0f, 800.0f, 40.0f, 20.0f, 150.0f, -150.0f, 800.0f, -800.0f };
+T1Param t3  = {  600.0f, 600.0f, 30.0f, 20.0f,  80.0f,  -80.0f, 400.0f, -400.0f };
 
-/* Task3 慢速参数 (功能同 Task1, 速度偏小) */
-T1Param t3 = { 500.0f, 400.0f, 80.0f, 10.0f, 80.0f, -80.0f, 300.0f, -300.0f };
+/* Task3A 领头车专用参数 (慢速, A车领跑) */
+T1Param t3a = {  600.0f, 600.0f, 30.0f, 20.0f,  80.0f,  -80.0f, 400.0f, -400.0f };
+
+/* Task3B 追车专用: 快→慢参数线性过渡, 与摄像头 P 控 (tk_speed_mult) 解耦
+ *   t3b_fast: 追车阶段基速, 比 A 车快
+ *   t3b_slow: 减速终点, 与 A 车同步 (值同 t3)
+ *   t3b_work: 运行时副本, 减速段实时插值, tk_param 指向它
+ */
+T1Param t3b_fast  = { 1000.0f, 800.0f, 40.0f, 20.0f, 150.0f, -150.0f, 800.0f, -800.0f };
+T1Param t3b_slow  = {  600.0f, 600.0f, 40.0f, 20.0f, 100.0f, -100.0f, 400.0f, -400.0f };
+T1Param t3b_work;
+
+/* Task3B 专用: 所有 8 个 PID/偏置字段线性插值 (快→慢), progress 0→1 */
+void t3b_interpolate(T1Param *out, const T1Param *src, const T1Param *dst, float p)
+{
+    out->spd_straight  = src->spd_straight  + (dst->spd_straight  - src->spd_straight)  * p;
+    out->spd_arc       = src->spd_arc       + (dst->spd_arc       - src->spd_arc)       * p;
+    out->spd_arc_kp    = src->spd_arc_kp    + (dst->spd_arc_kp    - src->spd_arc_kp)    * p;
+    out->gyro_kp       = src->gyro_kp       + (dst->gyro_kp       - src->gyro_kp)       * p;
+    out->arc_ofs_cw    = src->arc_ofs_cw    + (dst->arc_ofs_cw    - src->arc_ofs_cw)    * p;
+    out->arc_ofs_ccw   = src->arc_ofs_ccw   + (dst->arc_ofs_ccw   - src->arc_ofs_ccw)   * p;
+    out->arc_ofs_cw_t2 = src->arc_ofs_cw_t2 + (dst->arc_ofs_cw_t2 - src->arc_ofs_cw_t2) * p;
+    out->arc_ofs_ccw_t2= src->arc_ofs_ccw_t2+ (dst->arc_ofs_ccw_t2- src->arc_ofs_ccw_t2)* p;
+}
 
 /* 当前使用的参数指针: Task1/2 → &t1, Task3/4 → &t3 */
 T1Param *tk_param = &t1;
@@ -170,6 +193,16 @@ const PathSeg task2_path[TASK2_SEG_COUNT] = {
 };
 
 /*
+ * A车 Task3 路径: A→C(直)→CB弧(CCW)→B→D(直)→DA弧(CW)→A (同Task2路径, 使用T3A_HEADING独立可调)
+ */
+const PathSeg task3a_path[TASK3A_SEG_COUNT] = {
+    {SEG_STRAIGHT, T3A_HEADING_AC, "A->C Str", "C", 0},
+    {SEG_ARC_CCW,  0,              "CB Arc",   "B", 0},
+    {SEG_STRAIGHT, T3A_HEADING_BD, "B->D Str", "D", 0},
+    {SEG_ARC_CW,   0,              "DA Arc",   "A", 1},
+};
+
+/*
  * B车 Task3 路径: D → DA弧(CW) → A → A→C(直) → C → CB弧(CCW) → B → B→D(直) → D → DA弧(CW) → (追A,等STOP)
  *
  * 右转=yaw减小, 初始yaw在D点记录
@@ -196,24 +229,26 @@ const PathSeg task3b_path[TASK3B_SEG_COUNT] = {
  */
 const PathSeg task4a_path[TASK4A_SEG_COUNT] = {
     {SEG_STRAIGHT_DELAY, TA_HEADING_AO,  "A->O Dly", "O", 0},
-    {SEG_STRAIGHT_DELAY, TA_HEADING_OB,  "O->B Dly", "B", 0},
+    {SEG_STRAIGHT,       TA_HEADING_OB,  "O->B Str", "B", 0},
     {SEG_ARC_CW,         0,              "BC Arc",   "C", 0},
-    {SEG_STRAIGHT,       T1_HEADING_CD,  "C->D Str", "D", 0},
+    {SEG_STRAIGHT,       TA_HEADING_CD,  "C->D Str", "D", 0},
     {SEG_ARC_CW,         0,              "DA Arc",   "A", 1},
 };
 
 /*
- * B车 Task4 路径: D → DA弧(CW) → A → A→B(直) → B → BC弧(CW) → C → C→O(直) → O → O→D(直) → D
+ * B车 Task4 路径: D → DA弧(CW) → A → A→B(直) → B → BC弧(CW) → C → C→O(DELAY) → O → O→D(直→循迹到D) → +300编码器停车
  *
- * C→O: TB_HEADING_AC+180° 方向 (经过中心O)
- * O→D: TB_HEADING_BD 方向
+ * Seg 0-3: 同前
+ * Seg 4:   SEG_STRAIGHT, 陀螺仪保持O→D航向, 循迹检测到D点黑线
+ * Seg 5:   SEG_STRAIGHT_DELAY, 同航向多走300编码器计数 → 停车 (TASK_DONE)
  */
 const PathSeg task4b_path[TASK4B_SEG_COUNT] = {
     {SEG_ARC_CW,         0,              "DA Arc",   "A", 0},
     {SEG_STRAIGHT,       TB_HEADING_AB,  "A->B Str", "B", 0},
     {SEG_ARC_CW,         0,              "BC Arc",   "C", 1},
     {SEG_STRAIGHT_DELAY, TB_HEADING_CO,  "C->O Dly", "O", 0},
-    {SEG_STRAIGHT_DELAY, TB_HEADING_BD,  "O->D Dly", "D", 0},
+    {SEG_STRAIGHT,       TB_HEADING_OD,  "O->D Str", "D", 0},
+    {SEG_STRAIGHT_DELAY, 0.0f,           "+300 D->", "D", 0},  /* 同当前航向, 编码器多走300停车 */
 };
 
 /* ===================================================================
@@ -250,6 +285,10 @@ static float tk_arc_offset = 0.0f;
 
 /* 弧线终点: 连续全白计数器 */
 static uint8_t tk_white_cnt    = 0;
+
+/* 弧线最短运行保护: 进入弧线后 N ms 内不触发 end 检测, 防起步误触发 */
+#define T1_ARC_MIN_MS   800
+static uint32_t tk_arc_start_ms = 0;
 
 /* 计时 */
 static uint32_t tk_blind_start_ms = 0;
@@ -341,10 +380,16 @@ static uint8_t tk_detect_straight_end(void)
 {
     if (tick_ms - tk_blind_start_ms < T1_STRAIGHT_BLIND_MS) return 0;
 
-    /* 编码器到位终点: Task4 delay段 (A→O, O→B, C→O, O→D) */
+    /* 编码器到位终点: Task4 DELAY 段各自独立阈值 */
     if (tk_path[tk_seg_index].type == SEG_STRAIGHT_DELAY) {
-        int32_t avg = (ENCODER_GetLeftCount() + ENCODER_GetRightCount()) / 2;
-        return (avg >= T4_ENCODER_TARGET);
+        int32_t avg    = (ENCODER_GetLeftCount() + ENCODER_GetRightCount()) / 2;
+        int32_t target = 2000;  /* fallback */
+
+        if (tk_path == task4a_path && tk_seg_index == 0)      target = T4_ENC_AO;
+        else if (tk_path == task4b_path && tk_seg_index == 3) target = T4_ENC_CO;
+        else if (tk_path == task4b_path && tk_seg_index == 5) target = T4_ENC_DSTOP;
+
+        return (avg >= target);
     }
 
     uint8_t cnt = tk_black_count();
@@ -379,6 +424,11 @@ static uint8_t tk_detect_arc_end(void)
         yaw_ok = (fabs(delta) >= T1_ARC_YAW_DELTA);
     } else {
         yaw_ok = (fabs(delta) <= (180.0f - T1_ARC_YAW_DELTA));
+    }
+
+    /* 最短运行保护: 进入弧线不足 T1_ARC_MIN_MS 不触发 end, 防起步误判 */
+    if (tick_ms - tk_arc_start_ms < T1_ARC_MIN_MS) {
+        return 0;
     }
 
     if (tk_white_cnt >= T1_ARC_END_FRAMES && yaw_ok) {
@@ -419,6 +469,13 @@ static float tk_yaw_error(void)
 static void tk_gyro_control(float base_speed)
 {
     base_speed *= tk_speed_mult;
+
+    /* Task4B 最后一段停车: 纯直走, 左右等速, 不修正航向 */
+    if (tk_path == task4b_path && tk_seg_index == 5) {
+        SPEED_SetTarget((int32_t)base_speed, (int32_t)base_speed);
+        return;
+    }
+
     tk_current_yaw  = tk_get_yaw();      /* 一次读取, 避免二次调用消耗 */
     float yaw_err   = tk_current_yaw - tk_target_yaw - tk_heading_bias;
     if (yaw_err >  180.0f) yaw_err -= 360.0f;
@@ -475,19 +532,30 @@ static void tk_trace_control(float base_speed)
     if (apply) {
         float bias = tk_arc_offset;
 
-        /* Task2 入口需要大偏置咬线, 随弧线进度衰减到 T1 正常值 */
+        /* Task2 弧线偏置衰减 — 按段区分入口/出口方向
+         *   CB弧 (seg=1, CCW): yaw_d -35°→0°→+145°, 入口在近0端, 出口在近+180端
+         *   DA弧 (seg=3, CW):  yaw_d -142°→-180°→~-20°, 入口在近-180端, 出口在近0端
+         */
         if (tk_arc_offset != 0.0f
-            && (tk_path == task2_path || tk_path == task4a_path || tk_path == task4b_path)) {
+            && (tk_path == task2_path||tk_path == task3a_path)) {
             float bias_t1 = (tk_arc_offset > 0)
                           ? tk_param->arc_ofs_cw : tk_param->arc_ofs_ccw;
             float bias_t2 = (tk_arc_offset > 0)
                           ? tk_param->arc_ofs_cw_t2 : tk_param->arc_ofs_ccw_t2;
-            float progress;
-            if(yaw_d<0&&yaw_d>-40)
-                progress =(40.0f+yaw_d)/40.0f;
-            else if(yaw_d<-140&&yaw_d>-180)            
-                progress =(-140.0f-yaw_d)/40.0f;
-            else progress = 1.0f;
+            float progress = 1.0f;
+
+            if (tk_seg_index == 1) {
+                /* CB弧 (CCW): 入口 yaw_d∈(-40,40)  */
+                if (yaw_d < 40 && yaw_d > -40)
+                    progress = (40.0f + yaw_d) / 80.0f;
+            } else if (tk_seg_index == 3) {
+                /* DA弧 (CW, is_return=1): 入口 yaw_d∈(-180,-140) （140，180） */
+                if (yaw_d < -140 && yaw_d > -180)
+                    progress = (-140.0f - yaw_d) / 80.0f;
+                else if (yaw_d < 180 && yaw_d > 140)
+                    progress = (80-(yaw_d-140)) / 80.0f;
+            }
+
             bias = bias_t2 + (bias_t1 - bias_t2) * progress;   /* T2→T1 线性过渡 */
         }
          /* Task3B 入口需要大偏置咬线, 随弧线进度衰减到 T1 正常值 */       
@@ -496,27 +564,45 @@ static void tk_trace_control(float base_speed)
                           ? tk_param->arc_ofs_cw : tk_param->arc_ofs_ccw;
             float bias_t2 = (tk_arc_offset > 0)
                           ? tk_param->arc_ofs_cw_t2 : tk_param->arc_ofs_ccw_t2;
-            float progress;
-            if(yaw_d>0&&yaw_d<40)
-                progress =(40.0f-yaw_d)/40.0f;
-            else if(yaw_d>140&&yaw_d<180)            
-                progress =(-140.0f+yaw_d)/40.0f;
-            else progress = 1.0f;
+            float progress=1.0f;
+            if (tk_seg_index == 2) {
+                /* CB弧 (CCW): 入口 yaw_d∈(-40,40)  */
+                if (yaw_d < -140 && yaw_d > -180)
+                    progress = (80-(-140.0f - yaw_d)) / 80.0f;
+                else if (yaw_d < 180 && yaw_d > 140)
+                    progress = (yaw_d-140) / 80.0f;                
+            } else if (tk_seg_index ==4 ) {
+                /* DA弧 (CW, is_return=1): 入口 yaw_d∈(-180,-140) （140，180） */
+                if (yaw_d < 40 && yaw_d > -40)
+                    progress = (40.0f - yaw_d) / 80.0f;
+            }
             bias = bias_t2 + (bias_t1 - bias_t2) * progress;   /* T2→T1 线性过渡 */
+            if (tk_seg_index == 0&&yaw_d < 0 && yaw_d >-10) {
+                bias=-yaw_d/10*bias_t1;//起步偏置从0过渡到T1
+            }
+
         }
         /* Task4A和4B 入口需要大偏置咬线, 随弧线进度衰减到 T1 正常值 */
-        if (tk_arc_offset != 0.0f && (tk_path == task4a_path || tk_path == task4b_path)) {            float bias_t1 = (tk_arc_offset > 0)
+        if (tk_arc_offset != 0.0f && (tk_path == task4a_path )) {
+            float bias_t1 = (tk_arc_offset > 0)
                           ? tk_param->arc_ofs_cw : tk_param->arc_ofs_ccw;
             float bias_t2 = (tk_arc_offset > 0)
                           ? tk_param->arc_ofs_cw_t2 : tk_param->arc_ofs_ccw_t2;
-            float progress;
-            if(yaw_d>0&&yaw_d<40)
-                progress =(40.0f-yaw_d)/40.0f;
-            else if(yaw_d>140&&yaw_d<180)            
-                progress =(-140.0f+yaw_d)/40.0f;
-            else progress = 1.0f;
+            float progress=1.0f;
+            if (tk_seg_index == 2) {
+                /* CB弧 (CCW): 入口 yaw_d∈(-40,40)  */
+                if (yaw_d < 40 && yaw_d > -40)
+                    progress = (40-yaw_d) / 80.0f;              
+            } 
             bias = bias_t2 + (bias_t1 - bias_t2) * progress;   /* T2→T1 线性过渡 */
-        }                         
+        }
+        if (tk_arc_offset != 0.0f && (tk_path == task4b_path )) {
+            float bias_t1 = (tk_arc_offset > 0)
+                          ? tk_param->arc_ofs_cw : tk_param->arc_ofs_ccw;            
+            if (tk_seg_index == 0&&yaw_d < 0 && yaw_d >-10) {
+                bias=-yaw_d/10*bias_t1;//起步偏置从0过渡到T1
+            }
+        }                                 
         steering = bias * tk_speed_mult;
     }
 
@@ -525,11 +611,12 @@ static void tk_trace_control(float base_speed)
     if (sum != 0) {
         steering += sum * tk_param->spd_arc_kp * tk_speed_mult;
         last_sum = sum;
-    } else if (last_sum != 0) {
-        /* 丢线恢复: 用上次偏差方向 ×1.0 倍力度扫回去找线 */
-        steering += (last_sum > 0 ? 1.0f : -1.0f)
-                  * tk_param->spd_arc_kp * 1.0f * tk_speed_mult;
     }
+    // } else if (last_sum != 0) {
+    //     /* 丢线恢复: 用上次偏差方向 ×1.0 倍力度扫回去找线 */
+    //     steering += (last_sum > 0 ? 1.0f : -1.0f)
+    //               * tk_param->spd_arc_kp * 1.0f * tk_speed_mult;
+    // }
 
     float left  = base_speed + steering;
     float right = base_speed - steering;
@@ -602,16 +689,11 @@ static void tk_enter_segment(const PathSeg *seg)
             ENCODER_ResetRight();
         }
     } else {
-        /* 弧线段: 设置弧线偏置方向 + 记录起始航向 */
+        /* 弧线段: 统一用小偏置, 大偏置过渡由 tk_trace_control() 内 fade 逻辑处理 */
         tk_state = TASK_SEG_ARC;
-        if (tk_path == task2_path || tk_path == task3b_path|| tk_path == task4a_path || tk_path == task4b_path) {
-            /* Task 2 弧线偏移更大 (直线→弧线角度变化大) */
-            tk_arc_offset = (seg->type == SEG_ARC_CW)
-                          ? tk_param->arc_ofs_cw_t2 : tk_param->arc_ofs_ccw_t2;
-        } else {
-            tk_arc_offset = (seg->type == SEG_ARC_CW)
-                          ? tk_param->arc_ofs_cw : tk_param->arc_ofs_ccw;
-        }
+        tk_arc_start_ms = tick_ms;  /* 防起步误触发 arc end */
+        tk_arc_offset = (seg->type == SEG_ARC_CW)
+                      ? tk_param->arc_ofs_cw : tk_param->arc_ofs_ccw;
 
     }
 }
