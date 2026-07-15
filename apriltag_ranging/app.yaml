@@ -1,0 +1,14 @@
+id: atg3
+name: ATG3
+version: 3.0.0
+author: zz
+icon: ''
+desc: '1'
+files:
+  - apriltag_config.py
+  - apriltag_detector.py
+  - apriltag_editor.py
+  - calibrate.py
+  - main.py
+  - README.md
+  - sg90.py
