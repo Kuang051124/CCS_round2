@@ -14,7 +14,7 @@ uint8_t bit;
 // int gravitys[SENSOR_LEN] = {-3, -1, 0, 1, 3};
 
 // 五路第一版权重
-int gravitys[SENSOR_LEN] = {-4, -1, 0, 1, 4};
+int gravitys[SENSOR_LEN] = {-6, -2, 0, 2, 6};
 
 // 五路第二版权重
 // int gravitys[SENSOR_LEN] = {-3, -1, 0, 1, 3};

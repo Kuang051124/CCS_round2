@@ -24,8 +24,9 @@
 
 /* 编码器到位阈值: DELAY段独立可调 */
 #define T4_ENC_AO           2100    /* A车 A→O 到位计数 */
-#define T4_ENC_CO           1800    /* B车 C→O 到位计数 */
+#define T4_ENC_CO           1700    /* B车 C→O 到位计数 */
 #define T4_ENC_DSTOP         300    /* B车 循迹到D后多走300计数停车 */
+#define T4_STOP_MS           100     /* B车 C点停车等待时长 (ms) */
 
 /* ===================================================================
  * Task4 每段独立参数 — 替代旧的 tk_speed_mult 间接调速
@@ -45,6 +46,7 @@ extern T1Param t4_BAB;   /* A→B 快速超A    */
 extern T1Param t4_BBC;   /* BC弧 正常巡线   */
 extern T1Param t4_BCO;   /* C→O 慢速DELAY  */
 extern T1Param t4_BOD;   /* O→D 慢速DELAY  */
+extern T1Param t4_CSTOP; /* C点停车等待     */
 
 /* ===================================================================
  * API

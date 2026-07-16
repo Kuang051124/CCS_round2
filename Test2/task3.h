@@ -13,7 +13,7 @@
  * =================================================================== */
 
 #define T3_DIST_TARGET      30.0f   /* 目标距离 (cm)          */
-#define T3_DIST_KP          0.05f  /* P 增益 (倍率/cm误差)   */
+#define T3_DIST_KP          0.04f  /* P 增益 (倍率/cm误差)   */
 #define T3_SPEED_INIT       1.00f   /* 初始倍率 = 1.0, 追车速度由 t3b_fast 基速决定 */
 #define T3_SPEED_MIN        0.50f   /* 最小速度倍率           */
 #define T3_SPEED_MAX        2.00f   /* 最大速度倍率           */
@@ -33,7 +33,7 @@ extern uint8_t g_stop_reason;   /* 停车原因, tasks/pages 共享   */
  * =================================================================== */
 
 #define T3_FORCE_YAW_MIN    -180.0f  /* 强制停车: 航向差下限 (°)   */
-#define T3_FORCE_YAW_MAX    -100.0f  /* 强制停车: 航向差上限 (°)   */
+#define T3_FORCE_YAW_MAX    -85.0f  /* 强制停车: 航向差上限 (°)   */
 #define T3_FORCE_DIST_CM    35.0f   /* 强制停车: 距离阈值 (cm)    */
 
 /* ===================================================================

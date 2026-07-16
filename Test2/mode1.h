@@ -22,7 +22,7 @@
 #define T1_BLACK_THRESHOLD   1      /* 黑线判定: 至少N个传感器检测到黑色 (排除悬空全黑)   */
 #define T1_STRAIGHT_BLIND_MS 800    /* 直线段盲区: 启动后N ms内忽略传感器 (防止误触发弧线) */
 #define T1_ARC_END_FRAMES    10     /* 弧线结束判定: 连续N帧全白 + 角度变化达标           */
-#define T1_ARC_YAW_DELTA     160.0f /* 弧线结束判定: 累积航向变化 > 此值(°) 才对弧线终点   */
+#define T1_ARC_YAW_DELTA     150.0f /* 弧线结束判定: 累积航向变化 > 此值(°) 才对弧线终点   */
 #define T1_ARC_FADE_DEG      30.0f  /* 弧线偏置衰减角: Task2 大偏置→T1正常偏置 过渡角度 (°) */
 #define T1_GYRO_STEER_MAX    0.30f  /* 陀螺仪转向限幅: 差速不超过 base_speed 的 N%      */
 #define T1_GYRO_SAMPLES      20     /* 航向采样次数: 直线段启动时采样N次取平均              */
@@ -51,15 +51,15 @@
 #define T2_HEADING_BD         (-180.0f + ATAN08)    /* B→D: init + 180 - atan0.8 */
 
 /* ---- A车 Task3: A→C直 → CB弧 → B→D直 → DA弧 (从A出发, 慢速领跑) ---- */
-#define T3A_HEADING_AC        (-ATAN08+3)             /* A→C: 同 T2, 可独立微调 */
-#define T3A_HEADING_BD        (-180.0f + ATAN08+3)    /* B→D: 同 T2, 可独立微调 */
+#define T3A_HEADING_AC        (-ATAN08+1)             /* A→C: 同 T2, 可独立微调 */
+#define T3A_HEADING_BD        (-180.0f + ATAN08)    /* B→D: 同 T2, 可独立微调 */
 
 /* ---- B车 Task3: D→DA弧→A→C直→CB弧→B→D直 (从D出发) ---- */
 #define TB_HEADING_AC         (-180.0f - ATAN08-3)    /* A→C: 经DA弧后, init-180-atan0.8 */
-#define TB_HEADING_BD         (ATAN08+3)              /* B→D: 经CB弧后, init+atan0.8     */
+#define TB_HEADING_BD         (ATAN08+1)              /* B→D: 经CB弧后, init+atan0.8     */
 
 /* ---- B车 Task3 / Task4 通用 ---- */
-#define TB_HEADING_AB         -180.0f                /* A→B: 采样当前航向 */
+#define TB_HEADING_AB         -180.0f+2                /* A→B: 采样当前航向 */
 
 /* ---- Task4 新路径 (过中心O) ---- */
 /*
@@ -69,7 +69,7 @@
  */
 #define TA_HEADING_AO         T2_HEADING_AC             /* A→O: -ATAN08                 */
 #define TA_HEADING_OB         (T2_HEADING_BD + 180.0f)  /* O→B: +ATAN08                 */
-#define TA_HEADING_CD         T1_HEADING_CD             /* C→D: init+180° 微调           */
+#define TA_HEADING_CD         T1_HEADING_CD-2             /* C→D: init+180° 微调           */
 
 /*
  * B车: D→(DA弧)→A→B→(BC弧)→C→O→D
@@ -77,7 +77,7 @@
  *   A→B: init+180°, C→O: -ATAN08, O→D: +ATAN08
  */
 #define TB_HEADING_CO         (TB_HEADING_AC + 180.0f)  /* C→O: -ATAN08                 */
-#define TB_HEADING_OD         TB_HEADING_BD             /* O→D: +ATAN08 ≈ B→D 同方向    */
+#define TB_HEADING_OD         TB_HEADING_BD+5             /* O→D: +ATAN08 ≈ B→D 同方向    */
 
 /* ===================================================================
  * 路径段类型
@@ -108,7 +108,8 @@ typedef struct {
     float arc_ofs_ccw_t2;   /* T2 逆时针弧入口偏置 (counts/s, t1默认-1042) */
 } T1Param;
 
-extern T1Param t1;          /* Task1/2 参数 */
+extern T1Param t1;          /* Task1 参数 */
+extern T1Param t2;          /* Task2 参数 (独立于 t1) */
 extern T1Param t3;          /* Task3 基准慢速参数     */
 extern T1Param t3a;         /* Task3A 领头车专用参数   */
 extern T1Param t3b_fast;    /* Task3B 快速追车参数    */
@@ -118,6 +119,9 @@ extern T1Param *tk_param;   /* 当前参数指针 */
 
 /* 全局速度倍率: Car B 距离 P 控制用, 默认 1.0 */
 extern float tk_speed_mult;
+
+/* 直线段缓启动速率: 每帧递增 (counts/s), 0=禁用; 默认30, 外环50Hz≈1500ct/s² */
+extern float tk_ramp_rate;
 
 /* 超车航向偏置: 叠加到目标航向, 0=无偏置/正常行驶 */
 extern float tk_heading_bias;
@@ -158,7 +162,7 @@ extern const PathSeg task4a_path[];
 #define TASK4A_SEG_COUNT 5
 
 extern const PathSeg task4b_path[];
-#define TASK4B_SEG_COUNT 6   /* seg4循迹到D + seg5编码器多走300停车 */
+#define TASK4B_SEG_COUNT 7   /* +C点停车段 */
 
 /* ===================================================================
  * 共享内部 API (Task3 复用)

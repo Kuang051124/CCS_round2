@@ -40,6 +40,7 @@ void Task3A_Init(void)
     tk_param      = &t3a;  /* Task3A 专用参数, 独立于 t3 */
     tk_gyro_src   = GYRO_SRC_WIT;
     tk_speed_mult = 1.0f;
+    tk_ramp_rate  = 2.0f;  /* 直线段缓启动: 每帧+30ct/s, 600→需20帧≈400ms */
     task_init(task3a_path, TASK3A_SEG_COUNT);  /* Task3A 专用路径, 航向独立可调 */
 
     a_task3_cnt    = 0;

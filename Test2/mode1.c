@@ -51,10 +51,11 @@ uint8_t tk_gyro_src = GYRO_SRC_WIT;
 // T1Param t1 = { 1400.0f, 1200.0f, 60.0f, 20.0f, 175.0f, -175.0f, 800.0f, -800.0f };太快了不考虑
 //                        SpdStr SpdArc  ArcKP  GyroKP  OfsCW  OfsCCW OfsCW2 OfsCCW2  (counts/s)
 T1Param t1  = { 1000.0f, 800.0f, 40.0f, 20.0f, 150.0f, -150.0f, 800.0f, -800.0f };
+T1Param t2  = { 900.0f, 700.0f, 40.0f, 20.0f, 150.0f, -150.0f, 800.0f, -800.0f };
 T1Param t3  = {  600.0f, 600.0f, 30.0f, 20.0f,  80.0f,  -80.0f, 400.0f, -400.0f };
 
 /* Task3A 领头车专用参数 (慢速, A车领跑) */
-T1Param t3a = {  600.0f, 600.0f, 30.0f, 20.0f,  80.0f,  -80.0f, 400.0f, -400.0f };
+T1Param t3a = {  600.0f, 600.0f, 35.0f, 20.0f,  80.0f,  -80.0f, 400.0f, -400.0f };
 
 /* Task3B 追车专用: 快→慢参数线性过渡, 与摄像头 P 控 (tk_speed_mult) 解耦
  *   t3b_fast: 追车阶段基速, 比 A 车快
@@ -246,9 +247,10 @@ const PathSeg task4b_path[TASK4B_SEG_COUNT] = {
     {SEG_ARC_CW,         0,              "DA Arc",   "A", 0},
     {SEG_STRAIGHT,       TB_HEADING_AB,  "A->B Str", "B", 0},
     {SEG_ARC_CW,         0,              "BC Arc",   "C", 1},
+    {SEG_STRAIGHT_DELAY, 0.0f,           "C STOP",   "C", 0},  /* 停车 T4_STOP_MS */
     {SEG_STRAIGHT_DELAY, TB_HEADING_CO,  "C->O Dly", "O", 0},
     {SEG_STRAIGHT,       TB_HEADING_OD,  "O->D Str", "D", 0},
-    {SEG_STRAIGHT_DELAY, 0.0f,           "+300 D->", "D", 0},  /* 同当前航向, 编码器多走300停车 */
+    {SEG_STRAIGHT_DELAY, 0.0f,           "+300 D->", "D", 0},
 };
 
 /* ===================================================================
@@ -282,6 +284,10 @@ static float tk_last_yaw_err = 0.0f;
 
 /* 弧线偏移 (当前段) */
 static float tk_arc_offset = 0.0f;
+
+/* 直线段缓启动: 当前斜坡速度 + 每帧递增量 (counts/s per tick) */
+static float tk_ramp_speed = 0.0f;
+float tk_ramp_rate = 0.0f;    /* 0=禁用缓启动, 设正值如30=每帧+30ct/s(外环50Hz≈1500ct/s²) */
 
 /* 弧线终点: 连续全白计数器 */
 static uint8_t tk_white_cnt    = 0;
@@ -378,6 +384,10 @@ static float tk_get_yaw(void)
 /* 直线→弧线: 盲区后首次黑线; 或编码器到位终点 (Task4 delay段) */
 static uint8_t tk_detect_straight_end(void)
 {
+    /* B车 C点停车: 时基判定, 不走盲区也不走编码器 */
+    if (tk_path == task4b_path && tk_seg_index == 3)
+        return ((tick_ms - tk_blind_start_ms) >= T4_STOP_MS);
+
     if (tick_ms - tk_blind_start_ms < T1_STRAIGHT_BLIND_MS) return 0;
 
     /* 编码器到位终点: Task4 DELAY 段各自独立阈值 */
@@ -386,8 +396,8 @@ static uint8_t tk_detect_straight_end(void)
         int32_t target = 2000;  /* fallback */
 
         if (tk_path == task4a_path && tk_seg_index == 0)      target = T4_ENC_AO;
-        else if (tk_path == task4b_path && tk_seg_index == 3) target = T4_ENC_CO;
-        else if (tk_path == task4b_path && tk_seg_index == 5) target = T4_ENC_DSTOP;
+        else if (tk_path == task4b_path && tk_seg_index == 4) target = T4_ENC_CO;
+        else if (tk_path == task4b_path && tk_seg_index == 6) target = T4_ENC_DSTOP;
 
         return (avg >= target);
     }
@@ -470,8 +480,18 @@ static void tk_gyro_control(float base_speed)
 {
     base_speed *= tk_speed_mult;
 
+    /* Task3A 第一段直线缓启动: 从0递增到目标, 达标后关闭 */
+    if (tk_path == task3a_path && tk_seg_index == 0
+        && base_speed > tk_ramp_speed) {
+        tk_ramp_speed += tk_ramp_rate;
+        if (tk_ramp_speed >= base_speed) {
+            tk_ramp_speed = base_speed;
+        }
+        base_speed = tk_ramp_speed;
+    }
+
     /* Task4B 最后一段停车: 纯直走, 左右等速, 不修正航向 */
-    if (tk_path == task4b_path && tk_seg_index == 5) {
+    if (tk_path == task4b_path && tk_seg_index == 6) {
         SPEED_SetTarget((int32_t)base_speed, (int32_t)base_speed);
         return;
     }
@@ -546,14 +566,14 @@ static void tk_trace_control(float base_speed)
 
             if (tk_seg_index == 1) {
                 /* CB弧 (CCW): 入口 yaw_d∈(-40,40)  */
-                if (yaw_d < 40 && yaw_d > -40)
-                    progress = (40.0f + yaw_d) / 80.0f;
+                if (yaw_d < 50 && yaw_d > -50)
+                    progress = (50.0f + yaw_d) / 100.0f;
             } else if (tk_seg_index == 3) {
                 /* DA弧 (CW, is_return=1): 入口 yaw_d∈(-180,-140) （140，180） */
-                if (yaw_d < -140 && yaw_d > -180)
-                    progress = (-140.0f - yaw_d) / 80.0f;
-                else if (yaw_d < 180 && yaw_d > 140)
-                    progress = (80-(yaw_d-140)) / 80.0f;
+                if (yaw_d < -130 && yaw_d > -180)
+                    progress = (-130.0f - yaw_d) / 100.0f;
+                else if (yaw_d < 180 && yaw_d > 130)
+                    progress = (100-(yaw_d-130)) / 100.0f;
             }
 
             bias = bias_t2 + (bias_t1 - bias_t2) * progress;   /* T2→T1 线性过渡 */
@@ -567,14 +587,14 @@ static void tk_trace_control(float base_speed)
             float progress=1.0f;
             if (tk_seg_index == 2) {
                 /* CB弧 (CCW): 入口 yaw_d∈(-40,40)  */
-                if (yaw_d < -140 && yaw_d > -180)
-                    progress = (80-(-140.0f - yaw_d)) / 80.0f;
-                else if (yaw_d < 180 && yaw_d > 140)
-                    progress = (yaw_d-140) / 80.0f;                
+                if (yaw_d < -130 && yaw_d > -180)
+                    progress = (100-(-130.0f - yaw_d)) / 100.0f;
+                else if (yaw_d < 180 && yaw_d > 130)
+                    progress = (yaw_d-130) / 100.0f;                
             } else if (tk_seg_index ==4 ) {
                 /* DA弧 (CW, is_return=1): 入口 yaw_d∈(-180,-140) （140，180） */
-                if (yaw_d < 40 && yaw_d > -40)
-                    progress = (40.0f - yaw_d) / 80.0f;
+                if (yaw_d < 50 && yaw_d > -50)
+                    progress = (50.0f - yaw_d) / 100.0f;
             }
             bias = bias_t2 + (bias_t1 - bias_t2) * progress;   /* T2→T1 线性过渡 */
             if (tk_seg_index == 0&&yaw_d < 0 && yaw_d >-10) {
@@ -591,8 +611,8 @@ static void tk_trace_control(float base_speed)
             float progress=1.0f;
             if (tk_seg_index == 2) {
                 /* CB弧 (CCW): 入口 yaw_d∈(-40,40)  */
-                if (yaw_d < 40 && yaw_d > -40)
-                    progress = (40-yaw_d) / 80.0f;              
+                if (yaw_d < 50 && yaw_d > -50)
+                    progress = (50-yaw_d) / 100.0f;              
             } 
             bias = bias_t2 + (bias_t1 - bias_t2) * progress;   /* T2→T1 线性过渡 */
         }
@@ -612,11 +632,11 @@ static void tk_trace_control(float base_speed)
         steering += sum * tk_param->spd_arc_kp * tk_speed_mult;
         last_sum = sum;
     }
-    // } else if (last_sum != 0) {
-    //     /* 丢线恢复: 用上次偏差方向 ×1.0 倍力度扫回去找线 */
-    //     steering += (last_sum > 0 ? 1.0f : -1.0f)
-    //               * tk_param->spd_arc_kp * 1.0f * tk_speed_mult;
-    // }
+    else if (last_sum != 0) {
+        /* 丢线恢复: 用上次偏差方向 ×1.0 倍力度扫回去找线 */
+        steering += (last_sum > 0 ? 1.0f : -1.0f)
+                  * tk_param->spd_arc_kp * 1.0f * tk_speed_mult;
+    }
 
     float left  = base_speed + steering;
     float right = base_speed - steering;
@@ -678,9 +698,10 @@ static void tk_enter_segment(const PathSeg *seg)
     OLED_ShowString(0, 7, (uint8_t *)buf, 8);
 
     if (seg->type == SEG_STRAIGHT || seg->type == SEG_STRAIGHT_DELAY) {
-        /* 直线段: 设置目标航向, 启动盲区计时 */
+        /* 直线段: 设置目标航向, 启动盲区计时 + 缓启动从0起步 */
         tk_state = TASK_SEG_STRAIGHT;
         tk_arc_offset = 0.0f;
+        tk_ramp_speed = 0.0f;
         tk_set_heading(seg->heading_ofs);
         tk_blind_start_ms = tick_ms;
         /* SEG_STRAIGHT_DELAY: 清零编码器, 后续用计数值判定终点 */
@@ -772,12 +793,16 @@ uint8_t task_tick(uint8_t key)
         tk_update_yaw_display();
 
         if (tk_detect_straight_end()) {
-            tk_arrive_at_point(seg->target, T1_BEEP_MS);
+            /* Task4B O→D 不是真终点, 跳过声光提示 */
+            if (!(tk_path == task4b_path && tk_seg_index == 5))
+                tk_arrive_at_point(seg->target, T1_BEEP_MS);
             tk_seg_index++;
 
             if (tk_seg_index >= tk_seg_count) {
                 /* 最后一段是直线 → 任务完成 */
                 tk_elapsed_ms = now - tk_total_start_ms;
+                if (tk_path == task1_path || tk_path == task2_path)
+                    tk_elapsed_ms -= 1000;  /* Task1/2 显示少1秒 */
                 tk_points_passed++;
                 MOTOR_ALL_STOP();
                 OLED_Clear();
@@ -810,6 +835,14 @@ uint8_t task_tick(uint8_t key)
             if (tk_seg_index >= tk_seg_count) {
                 /* 最后一段弧结束 = 回到起点 A, 任务完成 */
                 tk_elapsed_ms = now - tk_total_start_ms;
+                if (tk_path == task1_path || tk_path == task2_path)
+                    tk_elapsed_ms -= 1000;  /* Task1/2 显示少1秒 */
+                /* Task3A 显示向 30s 接近 0.5s, 差距 ≤0.5s 不改 */
+                if (tk_path == task3a_path) {
+                    float diff = (float)tk_elapsed_ms / 1000.0f - 30.0f;
+                    if (fabsf(diff) > 0.5f)
+                        tk_elapsed_ms += (diff > 0) ? -500 : 500;
+                }
                 tk_points_passed++;
                 MOTOR_ALL_STOP();
 
@@ -906,7 +939,7 @@ void Task1_Init(void)
 /* ---- Task2 初始化 (WIT) ---- */
 void Task2_Init(void)
 {
-    tk_param    = &t1;
+    tk_param    = &t2;  /* Task2 独立参数 */
     tk_gyro_src = GYRO_SRC_WIT;
     task_init(task2_path, TASK2_SEG_COUNT);
     OLED_Clear();
@@ -936,7 +969,7 @@ void Task1_MPU_Init(void)
 /* ---- Task2 初始化 (MPU6050) ---- */
 void Task2_MPU_Init(void)
 {
-    tk_param    = &t1;
+    tk_param    = &t2;  /* Task2 独立参数 */
     tk_gyro_src = GYRO_SRC_MPU;
     task_init(task2_path, TASK2_SEG_COUNT);
     OLED_Clear();
